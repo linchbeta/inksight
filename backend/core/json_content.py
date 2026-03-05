@@ -8,18 +8,16 @@ import hashlib
 import json
 import logging
 import random
-import re
 from typing import Any
 
 import httpx
 
-from .config import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL
+from .config import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_IMAGE_PROVIDER, DEFAULT_IMAGE_MODEL
 from .content import _build_context_str, _build_style_instructions, _call_llm, _clean_json_response
 
 logger = logging.getLogger(__name__)
 
 DEDUP_MAX_RETRIES = 2
-
 
 def _collect_image_fields(blocks: list, fields: set):
     """Recursively collect image field names from layout blocks."""
@@ -98,10 +96,13 @@ async def generate_json_mode_content(
     content_tone: str | None = None,
     llm_provider: str = "",
     llm_model: str = "",
+    image_provider: str = "",
+    image_model: str = "",
     mac: str = "",
     screen_w: int = 400,
     screen_h: int = 300,
     api_key: str = "",
+    image_api_key: str = "",
 ) -> dict:
     """Generate content for a JSON-defined mode.
 
@@ -130,9 +131,12 @@ async def generate_json_mode_content(
         content_tone=content_tone,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        image_provider=image_provider,
+        image_model=image_model,
         config=config or {},
         date_ctx=date_ctx or {},
         api_key=api_key,
+        image_api_key=image_api_key,
     )
 
     if ctype == "static":
@@ -227,7 +231,12 @@ async def _generate_computed_content(mode_def: dict, content_cfg: dict, fallback
     if provider == "countdown":
         from .content import generate_countdown_content
         config = content_cfg.get("config", {})
-        cfg = config if config else (kwargs.get("config") or {})
+        cfg = dict(config if config else (kwargs.get("config") or {}))
+        mode_settings = (kwargs.get("config") or {}).get("mode_settings", {})
+        if isinstance(mode_settings, dict):
+            events = mode_settings.get("countdownEvents")
+            if isinstance(events, list):
+                cfg["countdownEvents"] = events
         return await generate_countdown_content(config=cfg)
     if provider == "daily_meta":
         date_ctx = kwargs.get("date_ctx", {}) or {}
@@ -276,7 +285,11 @@ async def _generate_computed_content(mode_def: dict, content_cfg: dict, fallback
 
     if provider == "memo":
         config = kwargs.get("config") or {}
-        memo_text = config.get("memo_text", "")
+        mode_settings = config.get("mode_settings", {}) if isinstance(config.get("mode_settings", {}), dict) else {}
+        memo_text = mode_settings.get("memo_text", "") if isinstance(mode_settings.get("memo_text", ""), str) else ""
+        if not memo_text:
+            memo_text = config.get("memo_text", "")
+        memo_text = memo_text if isinstance(memo_text, str) else ""
         if not memo_text:
             memo_text = fallback.get("memo_text", "在配置页面设置你的便签内容")
         return {"memo_text": memo_text}
@@ -355,10 +368,16 @@ async def _generate_external_data_content(mode_def: dict, content_cfg: dict, fal
         from .context import get_weather_forecast
         try:
             config = kwargs.get("config") or {}
+            mode_settings = config.get("mode_settings", {}) if isinstance(config.get("mode_settings", {}), dict) else {}
             city = config.get("city")
-            # 请求 5 天数据（今天 + 未来 4 天），便于多日卡片展示未来 4 天
-            data = await get_weather_forecast(city=city, days=4)
+            days = mode_settings.get("forecast_days", 4)
+            if not isinstance(days, int):
+                days = 4
+            days = max(1, min(7, days))
+            data = await get_weather_forecast(city=city, days=days)
             if not data:
+                return dict(fallback)
+            if not data.get("today_temp") or data["today_temp"] == "--":
                 return dict(fallback)
             merged = dict(fallback)
             merged.update(data)
@@ -372,15 +391,31 @@ async def _generate_external_data_content(mode_def: dict, content_cfg: dict, fal
 
 async def _generate_image_gen_content(mode_def: dict, content_cfg: dict, fallback: dict, **kwargs) -> dict:
     provider = content_cfg.get("provider", "")
-    if provider == "artwall":
+    if provider == "text2image":
         from .content import generate_artwall_content
-        return await generate_artwall_content(
+        mode_id = str(mode_def.get("mode_id", "") or "").upper()
+        mode_display_name = str(mode_def.get("display_name", "") or "")
+        mode_description = str(mode_def.get("description", "") or "")
+        prompt_hint = str(content_cfg.get("prompt_hint", "") or "")
+        prompt_template = str(content_cfg.get("prompt_template", "") or "")
+        fallback_title = str(fallback.get("artwork_title", "") or "")
+        result = await generate_artwall_content(
             date_str=kwargs.get("date_str", ""),
             weather_str=kwargs.get("weather_str", ""),
             festival=kwargs.get("festival", ""),
-            llm_provider=kwargs.get("llm_provider") or "aliyun",
-            llm_model=kwargs.get("llm_model") or "qwen-image-max",
+            image_provider=kwargs.get("image_provider") or DEFAULT_IMAGE_PROVIDER,
+            image_model=kwargs.get("image_model") or DEFAULT_IMAGE_MODEL,
+            mode_display_name=mode_display_name,
+            mode_description=mode_description,
+            prompt_hint=prompt_hint,
+            prompt_template=prompt_template,
+            fallback_title=fallback_title,
+            image_api_key=kwargs.get("image_api_key") or "",
         )
+        if mode_id != "ARTWALL":
+            result["artwork_title"] = ""
+            result["description"] = ""
+        return result
     return dict(fallback)
 
 

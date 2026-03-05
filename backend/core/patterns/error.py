@@ -4,7 +4,7 @@ ERROR 模式 - 错误显示
 """
 
 from PIL import Image, ImageDraw
-from .utils import SCREEN_W, SCREEN_H, EINK_BG, EINK_FG, load_font
+from .utils import SCREEN_W, SCREEN_H, EINK_BG, EINK_FG, apply_text_fontmode, load_font
 
 
 def draw_warning_triangle(draw: ImageDraw.ImageDraw, cx: int, cy: int, size: int = 40):
@@ -34,6 +34,7 @@ def render_error(
     """渲染错误页面"""
     img = Image.new("1", (screen_w, screen_h), EINK_BG)
     draw = ImageDraw.Draw(img)
+    apply_text_fontmode(draw)
 
     font_title = load_font("inter_medium", 16)
     font_detail = load_font("inter_medium", 11)

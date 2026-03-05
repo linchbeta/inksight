@@ -721,16 +721,20 @@ async def generate_artwall_content(
     date_str: str = "",
     weather_str: str = "",
     festival: str = "",
-    llm_provider: str = "aliyun",
-    llm_model: str = "qwen-image-max",
+    image_provider: str = "aliyun",
+    image_model: str = "qwen-image-max",
+    mode_display_name: str = "",
+    mode_description: str = "",
+    prompt_hint: str = "",
+    prompt_template: str = "",
+    fallback_title: str = "",
+    image_api_key: str = "",
 ) -> dict:
     """生成 ARTWALL 模式的内容 - 使用文生图模型"""
     if ctx is not None:
         date_str = ctx.date_str
         weather_str = ctx.weather_str
         festival = ctx.festival
-        llm_provider = ctx.llm_provider
-        llm_model = ctx.llm_model
     logger.info("[ARTWALL] Starting content generation...")
 
     context_parts = []
@@ -742,10 +746,14 @@ async def generate_artwall_content(
         context_parts.append(f"日期：{date_str}")
 
     context = "，".join(context_parts) if context_parts else "今日"
+    intent_parts = [p.strip() for p in (mode_display_name, mode_description, prompt_hint, prompt_template) if isinstance(p, str) and p.strip()]
+    intent = "；".join(intent_parts[:4])
+    title_seed = (fallback_title or mode_display_name or "墨韵天成").strip()
 
     title_prompt = f"""根据以下信息，生成一个富有诗意和意境的艺术作品标题（8字以内）：
 
 {context}
+主题要求：{intent or title_seed}
 
 要求：
 1. 富有诗意和意境，如山水画的题名
@@ -753,7 +761,7 @@ async def generate_artwall_content(
 3. 意境深远，留有想象空间
 4. 只输出标题，不要其他内容"""
 
-    artwork_title = "墨韵天成"
+    artwork_title = title_seed or "墨韵天成"
     try:
         title_text = await _call_llm("deepseek", "deepseek-chat", title_prompt)
         artwork_title = title_text.strip('"').strip("「」") or artwork_title
@@ -770,18 +778,28 @@ async def generate_artwall_content(
 构图：极度空灵，大量留白(Negative Space)，用最少的线条表达最多的含义，马一角构图。
 背景：纯净绝对白色(#FFFFFF)，无纸张纹理。
 意境：宁静、孤独、禅意(Zen minimalism)。
+主题约束：{intent or artwork_title}。
 画面内容：用几根简单的黑色线条勾勒出{artwork_title}的神韵。环境：{context}（极简暗示或留白）。
 """
 
         logger.info(f"[ARTWALL] Image prompt: {image_prompt[:100]}...")
 
-        api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if image_provider != "aliyun":
+            logger.warning(f"[ARTWALL] Unsupported image provider: {image_provider}")
+            return {
+                "artwork_title": artwork_title,
+                "image_url": "",
+                "description": "黑白线描作品",
+                "prompt": image_prompt,
+            }
+
+        api_key = image_api_key or os.getenv("DASHSCOPE_API_KEY", "")
         if not api_key or api_key.startswith("sk-your-"):
             logger.warning("[ARTWALL] No valid DASHSCOPE_API_KEY, using fallback")
             return {
                 "artwork_title": artwork_title,
                 "image_url": "",
-                "description": f"基于{context}创作的黑白版画",
+                "description": "黑白线描作品",
                 "prompt": image_prompt,
             }
 
@@ -790,7 +808,7 @@ async def generate_artwall_content(
             return {
                 "artwork_title": artwork_title,
                 "image_url": "",
-                "description": f"基于{context}创作的黑白版画",
+                "description": "黑白线描作品",
                 "prompt": image_prompt,
             }
 
@@ -804,7 +822,7 @@ async def generate_artwall_content(
         response = await _asyncio.to_thread(
             MultiModalConversation.call,
             api_key=api_key,
-            model="qwen-image-max",
+            model=image_model,
             messages=messages,
             result_format="message",
             stream=False,
@@ -821,9 +839,9 @@ async def generate_artwall_content(
             return {
                 "artwork_title": artwork_title,
                 "image_url": image_url,
-                "description": f"基于{context}创作的黑白版画",
+                "description": "黑白线描作品",
                 "prompt": image_prompt,
-                "model_name": "qwen-image-max",
+                "model_name": image_model,
             }
         else:
             logger.error(f"[ARTWALL] Image generation failed: {response.status_code}")
@@ -831,7 +849,7 @@ async def generate_artwall_content(
             return {
                 "artwork_title": artwork_title,
                 "image_url": "",
-                "description": f"基于{context}创作的黑白版画",
+                "description": "黑白线描作品",
                 "prompt": image_prompt,
             }
 

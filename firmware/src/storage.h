@@ -30,6 +30,10 @@ int  getRetryCount();
 void setRetryCount(int count);
 void resetRetryCount();
 
+// One-time boot flag for first-install live mode
+bool isFirstInstallLiveModePending();
+void markFirstInstallLiveModeDone();
+
 // Device token for backend auth
 void saveDeviceToken(const String &token);
 

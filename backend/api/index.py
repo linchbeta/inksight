@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import io
 import logging
 import os
@@ -66,6 +67,7 @@ from core.config import (
     SCREEN_HEIGHT,
     DEFAULT_CITY,
     DEFAULT_MODES,
+    DEFAULT_REFRESH_INTERVAL,
 )
 from core.mode_registry import get_registry
 from core.context import get_date_context, get_weather, calc_battery_pct
@@ -83,10 +85,15 @@ from core.config_store import (
     consume_pending_refresh,
     generate_device_token,
     validate_device_token,
+    create_user,
+    authenticate_user,
+    bind_device,
+    unbind_device,
+    get_user_devices,
 )
 from core.cache import content_cache
 from core.schemas import ConfigRequest
-from core.pipeline import generate_and_render
+from core.pipeline import generate_and_render, get_effective_mode_config
 from core.renderer import (
     render_error,
     image_to_bmp_bytes,
@@ -96,6 +103,8 @@ from core.stats_store import (
     init_stats_db,
     log_render,
     log_heartbeat,
+    get_latest_battery_voltage,
+    get_latest_heartbeat,
     get_device_stats,
     get_stats_overview,
     get_render_history,
@@ -108,7 +117,17 @@ from core.stats_store import (
     get_habit_status,
     delete_habit,
 )
-from core.auth import validate_mac_param, require_device_token, require_admin
+from core.auth import (
+    validate_mac_param,
+    require_device_token,
+    require_admin,
+    require_user,
+    optional_user,
+    create_session_token,
+    decode_session_token,
+    set_session_cookie,
+    clear_session_cookie,
+)
 
 
 @asynccontextmanager
@@ -161,6 +180,8 @@ _firmware_release_cache = {
     "payload": None,
 }
 _firmware_release_cache_lock = asyncio.Lock()
+_preview_push_queue: dict[str, dict] = {}
+_preview_push_queue_lock = asyncio.Lock()
 
 # Debug mode: used by firmware to enable fast refresh (1 min) for testing
 # Backend cache is always enabled regardless of this flag
@@ -320,6 +341,10 @@ async def _build_image(
     rssi: Optional[int] = None,
     screen_w: int = SCREEN_WIDTH, screen_h: int = SCREEN_HEIGHT,
     force_next: bool = False,
+    skip_cache: bool = False,
+    preview_city_override: Optional[str] = None,
+    preview_mode_override: Optional[dict] = None,
+    preview_memo_text: Optional[str] = None,
 ):
     battery_pct = calc_battery_pct(v)
 
@@ -328,10 +353,37 @@ async def _build_image(
         config = await get_active_config(mac)
 
     persona = await _resolve_mode(mac, config, persona_override, force_next=force_next)
+    mode_info = get_registry().get_mode_info(persona)
+    is_mode_cacheable = bool(mode_info.cacheable) if mode_info else True
+    if preview_city_override or preview_mode_override or preview_memo_text:
+        config = copy.deepcopy(config or {})
+        mode_overrides = dict(config.get("mode_overrides") or {})
+        current_mode_override = dict(mode_overrides.get(persona) or {})
+        if preview_city_override:
+            config["city"] = preview_city_override
+            current_mode_override["city"] = preview_city_override
+        if isinstance(preview_mode_override, dict) and preview_mode_override:
+            current_mode_override.update(preview_mode_override)
+        mode_overrides[persona] = current_mode_override
+        config["mode_overrides"] = mode_overrides
+        config["modeOverrides"] = mode_overrides
+        if (persona or "").upper() == "MEMO":
+            memo_text = current_mode_override.get("memo_text")
+            if isinstance(memo_text, str) and memo_text.strip():
+                config["memo_text"] = memo_text.strip()
+                config["memoText"] = memo_text.strip()
+            if isinstance(preview_memo_text, str) and preview_memo_text.strip():
+                memo_clean = preview_memo_text.strip()
+                current_mode_override["memo_text"] = memo_clean
+                mode_overrides[persona] = current_mode_override
+                config["mode_overrides"] = mode_overrides
+                config["modeOverrides"] = mode_overrides
+                config["memo_text"] = memo_clean
+                config["memoText"] = memo_clean
 
     # Try cache first
     cache_hit = False
-    if mac and config:
+    if mac and config and is_mode_cacheable and not skip_cache:
         await content_cache.check_and_regenerate_all(mac, config, v, screen_w, screen_h)
         cached_img = await content_cache.get(mac, persona, config, screen_w=screen_w, screen_h=screen_h)
         if cached_img:
@@ -340,10 +392,14 @@ async def _build_image(
             img = cached_img
         else:
             logger.info(f"[CACHE MISS] {mac}:{persona} - Generating fallback content")
+    elif skip_cache:
+        logger.info(f"[PREVIEW] Skip cache for {mac}:{persona}")
 
     content_data = None
+    content_fallback = False
     if not cache_hit:
-        city = config.get("city", DEFAULT_CITY) if config else None
+        effective_cfg = get_effective_mode_config(config, persona)
+        city = effective_cfg.get("city", DEFAULT_CITY) if effective_cfg else None
         date_ctx, weather = await asyncio.gather(
             get_date_context(),
             get_weather(city=city),
@@ -353,8 +409,15 @@ async def _build_image(
             screen_w=screen_w, screen_h=screen_h,
             mac=mac or "",
         )
+        if isinstance(content_data, dict):
+            if content_data.get("_is_fallback") is True:
+                content_fallback = True
+            else:
+                jm = get_registry().get_json_mode(persona)
+                if jm and (jm.definition.get("content", {}).get("type") == "image_gen"):
+                    content_fallback = not bool(content_data.get("image_url"))
 
-        if mac and config:
+        if mac and config and is_mode_cacheable:
             await content_cache.set(mac, persona, img, screen_w, screen_h)
 
     if mac:
@@ -371,7 +434,7 @@ async def _build_image(
         except Exception:
             logger.warning(f"[CONTENT] Failed to save content for {mac}:{persona}", exc_info=True)
 
-    return img, persona, cache_hit
+    return img, persona, cache_hit, content_fallback
 
 
 # ── Stats helper ─────────────────────────────────────────────
@@ -387,6 +450,39 @@ async def _log_render(
         await log_heartbeat(mac, voltage, rssi)
     except Exception:
         logger.warning(f"[STATS] Failed to log render stats for {mac}", exc_info=True)
+
+
+async def _resolve_preview_voltage(v: Optional[float], mac: Optional[str]) -> float:
+    if v is not None:
+        return v
+    if mac:
+        latest_voltage = await get_latest_battery_voltage(mac)
+        if latest_voltage is not None:
+            return latest_voltage
+    return 3.3
+
+
+def _resolve_refresh_minutes_for_device_state(config: Optional[dict], state: Optional[dict]) -> int:
+    refresh_minutes_raw = config.get("refresh_interval") if config else DEFAULT_REFRESH_INTERVAL
+    try:
+        refresh_minutes = int(refresh_minutes_raw)
+    except Exception:
+        refresh_minutes = DEFAULT_REFRESH_INTERVAL
+    if refresh_minutes <= 0:
+        refresh_minutes = DEFAULT_REFRESH_INTERVAL
+    expected_refresh_raw = state.get("expected_refresh_min", 0) if state else 0
+    try:
+        expected_refresh = int(expected_refresh_raw)
+    except Exception:
+        expected_refresh = 0
+    if expected_refresh > 0:
+        refresh_minutes = expected_refresh
+    return refresh_minutes
+
+
+def _reconnect_threshold_seconds(refresh_minutes: int) -> int:
+    base_seconds = max(1, int(refresh_minutes)) * 60
+    return max(base_seconds + 30, int(base_seconds * 1.5))
 
 
 def _build_firmware_manifest(version: str, download_url: str) -> dict:
@@ -539,6 +635,7 @@ async def render(
     mac: Optional[str] = Query(default=None, description="Device MAC address"),
     persona: Optional[str] = Query(default=None, description="Force persona"),
     rssi: Optional[int] = Query(default=None, description="WiFi RSSI (dBm)"),
+    refresh_min: Optional[int] = Query(default=None, ge=1, le=1440, description="Device effective refresh interval in minutes"),
     w: int = Query(default=SCREEN_WIDTH, ge=100, le=1600, description="Screen width in pixels"),
     h: int = Query(default=SCREEN_HEIGHT, ge=100, le=1200, description="Screen height in pixels"),
     next_mode: Optional[int] = Query(default=None, alias="next", description="1 = advance to next mode (double-click)"),
@@ -552,8 +649,81 @@ async def render(
     logger.debug(f"[RENDER] Request started: mac={mac}, v={v}, persona={persona}, next={force_next}, size={w}x{h}")
 
     try:
-        img, resolved_persona, cache_hit = await _build_image(
+        if mac:
+            pushed_payload = None
+            async with _preview_push_queue_lock:
+                pushed_payload = _preview_push_queue.pop(mac, None)
+            if pushed_payload and pushed_payload.get("image"):
+                try:
+                    with Image.open(io.BytesIO(pushed_payload["image"])) as pushed_img:
+                        img = pushed_img.convert("1")
+                        if img.size != (w, h):
+                            img = img.resize((w, h), Image.NEAREST)
+                    bmp_bytes = image_to_bmp_bytes(img)
+                    elapsed = time.time() - start_time
+                    elapsed_ms = int(elapsed * 1000)
+                    resolved_persona = pushed_payload.get("mode") or persona or "PUSH_PREVIEW"
+                    await _log_render(mac, resolved_persona, False, elapsed_ms, v, rssi)
+                    if refresh_min is not None:
+                        await update_device_state(mac, expected_refresh_min=refresh_min)
+                    logger.info(
+                        f"[RENDER] ✓ Preview push delivered in {elapsed:.2f}s - {mac}:{resolved_persona} ({w}x{h})"
+                    )
+                    headers = {"X-Preview-Push": "1"}
+                    was_pending = await consume_pending_refresh(mac)
+                    if was_pending:
+                        headers["X-Pending-Refresh"] = "1"
+                    return Response(content=bmp_bytes, media_type="image/bmp", headers=headers)
+                except Exception as push_err:
+                    logger.warning(f"[RENDER] Failed to deliver pushed preview for {mac}: {push_err}")
+
+        skip_cache_for_this_render = False
+        if mac:
+            cfg_for_online_check = await get_active_config(mac)
+            if cfg_for_online_check:
+                state_for_online_check = await get_device_state(mac)
+                refresh_minutes_for_online_check = _resolve_refresh_minutes_for_device_state(
+                    cfg_for_online_check, state_for_online_check
+                )
+                latest_heartbeat = await get_latest_heartbeat(mac)
+                if latest_heartbeat and latest_heartbeat.get("created_at"):
+                    try:
+                        now_dt = datetime.now()
+                        delta_seconds = (
+                            now_dt - datetime.fromisoformat(latest_heartbeat["created_at"])
+                        ).total_seconds()
+                        threshold_seconds = _reconnect_threshold_seconds(refresh_minutes_for_online_check)
+                        last_regen_raw = (
+                            state_for_online_check.get("last_reconnect_regen_at", "")
+                            if state_for_online_check
+                            else ""
+                        )
+                        regen_cooldown_ok = True
+                        if isinstance(last_regen_raw, str) and last_regen_raw:
+                            try:
+                                since_last_regen = (
+                                    now_dt - datetime.fromisoformat(last_regen_raw)
+                                ).total_seconds()
+                                regen_cooldown_ok = since_last_regen > threshold_seconds
+                            except Exception:
+                                regen_cooldown_ok = True
+                        if delta_seconds > threshold_seconds and regen_cooldown_ok:
+                            skip_cache_for_this_render = True
+                            await update_device_state(
+                                mac, last_reconnect_regen_at=now_dt.isoformat()
+                            )
+                            await content_cache.force_regenerate_all(
+                                mac, cfg_for_online_check, v, w, h
+                            )
+                            logger.info(
+                                f"[RECONNECT] {mac} offline {int(delta_seconds)}s "
+                                f"(threshold={threshold_seconds}s), forcing fresh render"
+                            )
+                    except Exception:
+                        pass
+        img, resolved_persona, cache_hit, content_fallback = await _build_image(
             v, mac, persona, rssi, screen_w=w, screen_h=h, force_next=force_next,
+            skip_cache=skip_cache_for_this_render,
         )
         # 确保返回给固件的图像尺寸严格等于设备请求的 w×h。
         # 如果某个模式或配置导致渲染尺寸与固件编译时的分辨率不一致，
@@ -574,12 +744,16 @@ async def render(
 
         if mac:
             await _log_render(mac, resolved_persona, cache_hit, elapsed_ms, v, rssi)
+            if refresh_min is not None:
+                await update_device_state(mac, expected_refresh_min=refresh_min)
 
         headers = {}
         if mac:
             was_pending = await consume_pending_refresh(mac)
             if was_pending:
                 headers["X-Pending-Refresh"] = "1"
+        if content_fallback:
+            headers["X-Content-Fallback"] = "1"
 
         return Response(content=bmp_bytes, media_type="image/bmp", headers=headers)
     except Exception as e:
@@ -648,21 +822,45 @@ async def get_widget(
 @limiter.limit("20/minute")
 async def preview(
     request: Request,
-    v: float = Query(default=3.3, description="Battery voltage"),
+    v: Optional[float] = Query(default=None, description="Battery voltage"),
     mac: Optional[str] = Query(default=None, description="Device MAC address"),
     persona: Optional[str] = Query(default=None, description="Force persona"),
+    city_override: Optional[str] = Query(default=None, description="Override city for preview"),
+    mode_override: Optional[str] = Query(default=None, description="JSON object override for current mode in preview only"),
+    memo_text: Optional[str] = Query(default=None, description="Memo text override for MEMO preview"),
     w: int = Query(default=SCREEN_WIDTH, ge=100, le=1600, description="Screen width in pixels"),
     h: int = Query(default=SCREEN_HEIGHT, ge=100, le=1200, description="Screen height in pixels"),
+    no_cache: Optional[int] = Query(default=None, description="1 = bypass cache for this preview"),
 ):
     if mac:
         mac = validate_mac_param(mac)
     try:
-        img, resolved_persona, cache_hit = await _build_image(
-            v, mac, persona, screen_w=w, screen_h=h,
+        effective_v = await _resolve_preview_voltage(v, mac)
+        parsed_mode_override = None
+        if mode_override:
+            try:
+                candidate = json.loads(mode_override)
+                if isinstance(candidate, dict):
+                    parsed_mode_override = candidate
+            except Exception:
+                parsed_mode_override = None
+        img, resolved_persona, cache_hit, _content_fallback = await _build_image(
+            effective_v, mac, persona, screen_w=w, screen_h=h,
+            skip_cache=(no_cache == 1),
+            preview_city_override=(city_override.strip() if city_override else None),
+            preview_mode_override=parsed_mode_override,
+            preview_memo_text=(memo_text if isinstance(memo_text, str) else None),
         )
         png_bytes = image_to_png_bytes(img)
         logger.info(f"[PREVIEW] Generated PNG: {len(png_bytes)} bytes, persona={resolved_persona} ({w}x{h})")
-        return Response(content=png_bytes, media_type="image/png")
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+            headers={
+                "X-Cache-Hit": "1" if cache_hit else "0",
+                "X-Preview-Bypass": "1" if no_cache == 1 else "0",
+            },
+        )
     except Exception:
         logger.exception("Exception occurred during preview")
         err_img = render_error(mac=mac or "unknown", screen_w=w, screen_h=h)
@@ -675,10 +873,21 @@ async def preview(
 
 
 @app.post("/api/config")
-async def post_config(body: ConfigRequest, admin_auth: None = Depends(require_admin)):
+async def post_config(
+    body: ConfigRequest,
+    x_inksight_client: Optional[str] = Header(default=None),
+    admin_auth: None = Depends(require_admin),
+):
     data = body.model_dump()
     mac = data["mac"]
+    modes = data.get("modes", [])
+    logger.info(
+        f"[CONFIG SAVE REQUEST] source={x_inksight_client or 'unknown'} "
+        f"mac={mac} modes={len(modes) if isinstance(modes, list) else 0} "
+        f"refresh_strategy={data.get('refresh_strategy')}"
+    )
     config_id = await save_config(mac, data)
+    await update_device_state(mac, runtime_mode="interval")
 
     saved_config = await get_active_config(mac)
     if saved_config:
@@ -698,6 +907,7 @@ async def get_config(mac: str, x_device_token: Optional[str] = Header(default=No
         return JSONResponse({"error": "no config found"}, status_code=404)
     # Strip encrypted key from API response (keep has_api_key flag)
     config.pop("llm_api_key", None)
+    config.pop("image_api_key", None)
     return config
 
 
@@ -708,6 +918,7 @@ async def get_config_hist(mac: str, x_device_token: Optional[str] = Header(defau
     # Strip encrypted keys from API response
     for cfg in history:
         cfg.pop("llm_api_key", None)
+        cfg.pop("image_api_key", None)
     return {"mac": mac, "configs": history}
 
 
@@ -735,6 +946,7 @@ async def list_modes():
             "cacheable": info.cacheable,
             "description": info.description,
             "source": info.source,
+            "settings_schema": info.settings_schema,
         })
     return {"modes": modes}
 
@@ -1036,10 +1248,92 @@ async def trigger_refresh(mac: str, x_device_token: Optional[str] = Header(defau
 async def device_state(mac: str, x_device_token: Optional[str] = Header(default=None)):
     """Get device runtime state."""
     await require_device_token(mac, x_device_token)
+    if x_device_token:
+        await update_device_state(mac, last_state_poll_at=datetime.now().isoformat())
     state = await get_device_state(mac)
     if not state:
         return JSONResponse({"error": "no device state found"}, status_code=404)
+
+    cfg = await get_active_config(mac, log_load=False)
+    refresh_minutes = _resolve_refresh_minutes_for_device_state(cfg, state)
+    latest_heartbeat = await get_latest_heartbeat(mac)
+    last_seen = latest_heartbeat.get("created_at") if latest_heartbeat else None
+    is_online = False
+    if isinstance(last_seen, str) and last_seen:
+        try:
+            delta_seconds = (datetime.now() - datetime.fromisoformat(last_seen)).total_seconds()
+            is_online = delta_seconds <= (refresh_minutes * 60)
+        except Exception:
+            is_online = False
+    state["last_seen"] = last_seen
+    state["is_online"] = is_online
+    state["refresh_minutes"] = refresh_minutes
+
+    # Prefer explicit device-reported runtime_mode when available.
+    # Firmware toggles this via /api/device/{mac}/runtime on BOOT key action.
+    explicit_mode = str(state.get("runtime_mode") or "").lower()
+    if explicit_mode in ("active", "interval"):
+        state["runtime_mode"] = explicit_mode
+        return state
+
+    runtime_mode = ""
+    last_poll = state.get("last_state_poll_at", "")
+    if isinstance(last_poll, str) and last_poll:
+        try:
+            delta = (datetime.now() - datetime.fromisoformat(last_poll)).total_seconds()
+            runtime_mode = "active" if delta <= 8 else "interval"
+        except Exception:
+            pass
+
+    if runtime_mode not in ("active", "interval"):
+        runtime_mode = "interval"
+
+    state["runtime_mode"] = runtime_mode
     return state
+
+
+@app.post("/api/device/{mac}/runtime")
+async def set_runtime_mode(mac: str, body: dict, x_device_token: Optional[str] = Header(default=None)):
+    """Update device runtime mode (active/interval)."""
+    await require_device_token(mac, x_device_token)
+    mode = str(body.get("mode", "")).strip().lower()
+    if mode not in ("active", "interval"):
+        return JSONResponse({"error": "mode must be active or interval"}, status_code=400)
+    await update_device_state(mac, runtime_mode=mode)
+    return {"ok": True, "runtime_mode": mode}
+
+
+@app.post("/api/device/{mac}/apply-preview")
+async def apply_preview_to_device(
+    mac: str,
+    request: Request,
+    mode: str = Query(default="", description="Optional mode hint for logs/state"),
+    x_device_token: Optional[str] = Header(default=None),
+):
+    """Queue a one-shot preview image to be sent by /api/render."""
+    await require_device_token(mac, x_device_token)
+    body = await request.body()
+    if not body:
+        return JSONResponse({"error": "empty image payload"}, status_code=400)
+    if len(body) > 4 * 1024 * 1024:
+        return JSONResponse({"error": "image payload too large"}, status_code=413)
+
+    try:
+        with Image.open(io.BytesIO(body)) as incoming:
+            normalized = io.BytesIO()
+            incoming.convert("L").save(normalized, format="PNG")
+            normalized_bytes = normalized.getvalue()
+    except Exception:
+        return JSONResponse({"error": "invalid image payload"}, status_code=400)
+
+    mode_hint = mode.strip().upper()
+    async with _preview_push_queue_lock:
+        _preview_push_queue[mac] = {"image": normalized_bytes, "mode": mode_hint}
+    await set_pending_refresh(mac, True)
+    logger.info(
+        f"[DEVICE] Queued preview push for {mac}, bytes={len(normalized_bytes)}, mode={mode_hint or '-'}"
+    )
+    return {"ok": True, "message": "Preview queued"}
 
 
 @app.post("/api/device/{mac}/switch")
@@ -1056,9 +1350,29 @@ async def switch_mode(mac: str, body: dict, x_device_token: Optional[str] = Head
 
 
 @app.post("/api/device/{mac}/favorite")
-async def favorite_content(mac: str, x_device_token: Optional[str] = Header(default=None)):
+async def favorite_content(
+    mac: str,
+    body: Optional[dict] = None,
+    x_device_token: Optional[str] = Header(default=None),
+):
     """Favorite the most recently rendered content for this device."""
     await require_device_token(mac, x_device_token)
+    mode = ""
+    if isinstance(body, dict):
+        mode = str(body.get("mode", "")).strip().upper()
+    if mode:
+        registry = get_registry()
+        if not registry.is_supported(mode):
+            return JSONResponse({"error": f"unsupported mode: {mode}"}, status_code=400)
+        latest = await get_latest_render_content(mac)
+        if latest and latest.get("mode_id", "").upper() == mode:
+            import json
+            await add_favorite(mac, mode, json.dumps(latest["content"], ensure_ascii=False))
+        else:
+            await add_favorite(mac, mode, None)
+        logger.info(f"[DEVICE] Mode favorited for {mac}: {mode}")
+        return {"ok": True, "message": "Mode favorited", "mode_id": mode}
+
     latest = await get_latest_render_content(mac)
     if not latest:
         state = await get_device_state(mac)
@@ -1141,6 +1455,110 @@ async def provision_device_token(mac: str):
     token = await generate_device_token(mac)
     logger.info(f"[AUTH] 为设备 {mac} 分发了新 Token")
     return {"token": token, "new": True}
+
+
+# ── Device discovery (public, no auth) ────────────────────────
+
+
+@app.get("/api/devices/recent")
+async def recent_devices(minutes: int = Query(default=10, ge=1, le=60)):
+    """Return MACs seen in the last N minutes (for post-flash discovery)."""
+    import aiosqlite
+    from datetime import datetime, timedelta
+    from core.stats_store import DB_PATH
+    cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+    logger.info(f"[DISCOVERY] recent_devices requested: minutes={minutes}, cutoff={cutoff}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """SELECT DISTINCT mac, MAX(created_at) as last_seen
+               FROM device_heartbeats
+               WHERE created_at > ?
+               GROUP BY mac
+               ORDER BY last_seen DESC""",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+    devices = [{"mac": r[0], "last_seen": r[1]} for r in rows if r and r[0]]
+    macs = [d["mac"] for d in devices]
+    logger.info(f"[DISCOVERY] recent_devices result: count={len(devices)}, macs={macs}")
+    return {"devices": devices}
+
+
+# ── User auth endpoints ───────────────────────────────────────
+
+
+@app.post("/api/auth/register")
+async def auth_register(body: dict, response: Response):
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if not username or len(username) < 2 or len(username) > 30:
+        return JSONResponse({"error": "用户名长度须为 2-30 字符"}, status_code=400)
+    if len(password) < 4:
+        return JSONResponse({"error": "密码至少 4 位"}, status_code=400)
+    user_id = await create_user(username, password)
+    if user_id is None:
+        return JSONResponse({"error": "用户名已存在"}, status_code=409)
+    token = create_session_token(user_id, username)
+    set_session_cookie(response, token)
+    return {"ok": True, "user_id": user_id, "username": username, "token": token}
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: dict, response: Response):
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    user = await authenticate_user(username, password)
+    if not user:
+        return JSONResponse({"error": "用户名或密码错误"}, status_code=401)
+    token = create_session_token(user["id"], user["username"])
+    set_session_cookie(response, token)
+    return {"ok": True, "user_id": user["id"], "username": user["username"], "token": token}
+
+
+@app.get("/api/auth/me")
+async def auth_me(user_id: int = Depends(require_user)):
+    from core.db import get_main_db
+    db = await get_main_db()
+    cursor = await db.execute("SELECT id, username, created_at FROM users WHERE id = ?", (user_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return JSONResponse({"error": "用户不存在"}, status_code=404)
+    return {"user_id": row[0], "username": row[1], "created_at": row[2]}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(response: Response):
+    clear_session_cookie(response)
+    return {"ok": True}
+
+
+# ── User device endpoints ─────────────────────────────────────
+
+
+@app.get("/api/user/devices")
+async def list_user_devices(user_id: int = Depends(require_user)):
+    devices = await get_user_devices(user_id)
+    return {"devices": devices}
+
+
+@app.post("/api/user/devices")
+async def bind_user_device(body: dict, user_id: int = Depends(require_user)):
+    mac = (body.get("mac") or "").strip().upper()
+    nickname = (body.get("nickname") or "").strip()
+    if not mac:
+        return JSONResponse({"error": "MAC 地址不能为空"}, status_code=400)
+    ok = await bind_device(user_id, mac, nickname)
+    if not ok:
+        return JSONResponse({"error": "设备已绑定"}, status_code=409)
+    return {"ok": True}
+
+
+@app.delete("/api/user/devices/{mac:path}")
+async def unbind_user_device(mac: str, user_id: int = Depends(require_user)):
+    ok = await unbind_device(user_id, mac.upper())
+    if not ok:
+        return JSONResponse({"error": "设备未绑定"}, status_code=404)
+    return {"ok": True}
 
 
 # ── Stats endpoints ──────────────────────────────────────────

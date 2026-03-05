@@ -30,85 +30,113 @@ import {
   PenTool,
   BarChart3,
   Target,
+  Plus,
 } from "lucide-react";
 
-const modes = [
-  {
-    name: "STOIC",
-    label: "斯多葛哲学",
-    desc: "庄重、内省的哲学语录，适合工作日的清晨",
-    icon: BookOpen,
-  },
-  {
-    name: "ROAST",
-    label: "毒舌吐槽",
-    desc: "犀利的中文吐槽，用黑色幽默缓解压力",
-    icon: Flame,
-  },
-  {
-    name: "ZEN",
-    label: "禅意",
-    desc: "极简的汉字，营造宁静氛围",
-    icon: CircleDot,
-  },
+const coreModes = [
   {
     name: "DAILY",
-    label: "每日推荐",
-    desc: "语录、书籍推荐、冷知识、节气信息",
+    label: "每日",
+    desc: "语录、书籍推荐、冷知识的综合日报",
+    descLines: ["语录、书籍推荐、", "冷知识的综合日报"],
     icon: CloudSun,
   },
   {
-    name: "BRIEFING",
-    label: "AI 简报",
-    desc: "Hacker News Top 3 + Product Hunt #1",
-    icon: Newspaper,
-  },
-  {
-    name: "ARTWALL",
-    label: "AI 画廊",
-    desc: "根据天气/节气生成黑白版画风格艺术",
-    icon: Palette,
-  },
-  {
-    name: "RECIPE",
-    label: "每日食谱",
-    desc: "时令食材推荐早中晚三餐方案",
-    icon: UtensilsCrossed,
-  },
-  {
-    name: "FITNESS",
-    label: "健身计划",
-    desc: "简单的居家健身训练计划与健康提示",
-    icon: Dumbbell,
+    name: "WEATHER",
+    label: "天气",
+    desc: "实时天气和未来趋势看板",
+    descLines: ["实时天气和未来", "趋势看板"],
+    icon: CloudSun,
   },
   {
     name: "POETRY",
-    label: "每日诗词",
-    desc: "精选古典诗词，感受文字之美",
+    label: "诗词",
+    desc: "古诗词与简短注解",
+    descLines: ["古诗词与简短注解"],
     icon: ScrollText,
   },
   {
-    name: "COUNTDOWN",
-    label: "倒计时",
-    desc: "重要日期倒计时/正计日，纪念日提醒",
-    icon: Timer,
+    name: "ARTWALL",
+    label: "画廊",
+    desc: "根据时令生成黑白艺术画",
+    descLines: ["根据时令生成", "黑白艺术画"],
+    icon: Palette,
   },
   {
     name: "ALMANAC",
     label: "老黄历",
-    desc: "农历日期、宜忌、节气、养生提示",
+    desc: "农历节气与宜忌",
+    descLines: ["农历节气与宜忌"],
     icon: Calendar,
+  },
+  {
+    name: "BRIEFING",
+    label: "简报",
+    desc: "科技热榜 + AI 洞察简报",
+    descLines: ["科技热榜 + AI", "洞察简报"],
+    icon: Newspaper,
+  },
+];
+
+const moreModes = [
+  {
+    name: "STOIC",
+    label: "斯多葛",
+    desc: "每日一句哲学箴言",
+    icon: BookOpen,
+  },
+  {
+    name: "ZEN",
+    label: "禅意",
+    desc: "一个大字表达当下心境",
+    icon: CircleDot,
+  },
+  {
+    name: "RECIPE",
+    label: "食谱",
+    desc: "按时段推荐三餐方案",
+    icon: UtensilsCrossed,
+  },
+  {
+    name: "COUNTDOWN",
+    label: "倒计时",
+    desc: "重要日程倒计时/正计时",
+    icon: Timer,
+  },
+  {
+    name: "MEMO",
+    label: "便签",
+    desc: "展示自定义便签文字",
+    icon: ScrollText,
+  },
+  {
+    name: "HABIT",
+    label: "打卡",
+    desc: "每日习惯完成进度",
+    icon: Target,
+  },
+  {
+    name: "ROAST",
+    label: "毒舌",
+    desc: "轻松幽默的吐槽风格内容",
+    icon: Flame,
+  },
+  {
+    name: "FITNESS",
+    label: "健身",
+    desc: "居家健身动作与建议",
+    icon: Dumbbell,
   },
   {
     name: "LETTER",
     label: "慢信",
-    desc: "来自不同时空的一封温暖短信",
+    desc: "来自不同时空的一封慢信",
     icon: Mail,
   },
   {
     name: "THISDAY",
-    label: "历史上的今天",
-    desc: "同一天发生过的重大历史事件",
+    label: "今日历史",
+    desc: "历史上的今天重大事件",
     icon: Globe,
   },
   {
@@ -185,22 +213,23 @@ export default function Home() {
                 Open Source &middot; ESP32-C3 &middot; E-Ink
               </p>
               <h1 className="font-serif text-4xl md:text-5xl lg:text-6xl font-bold text-ink leading-tight mb-6">
-                InkSight
+                InkSight 墨水屏
                 <br />
-                <span className="text-ink-muted">桌面上的斯多葛哲学家</span>
+                <span className="text-ink-muted text-3xl md:text-4xl lg:text-5xl">桌面上的多场景AI搭档</span>
               </h1>
               <p className="text-lg text-ink-light leading-relaxed mb-8 max-w-lg">
                 一款极简主义的智能电子墨水屏桌面摆件，通过 LLM
-                生成有温度的「慢信息」。10 种内容模式，从哲学语录到 AI
+                生成有温度的「慢信息」。数十种内容模式，从每日推荐到 AI
                 简报，为你的桌面带来有温度的智能陪伴。
               </p>
               <div className="flex flex-col sm:flex-row gap-3">
                 <Link href="/flash">
-                  <Button size="lg">开始制作 (DIY Guide)</Button>
-                </Link>
-                <Link href="/store">
-                  <Button variant="outline" size="lg">
-                    在线体验 (Live Demo)
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="bg-white text-ink border-ink/20 hover:bg-ink hover:text-white active:bg-ink active:text-white"
+                  >
+                    开始制作
                   </Button>
                 </Link>
               </div>
@@ -210,11 +239,12 @@ export default function Home() {
             <div className="flex items-center justify-center animate-fade-in">
               <div className="relative w-full max-w-md aspect-[4/3] rounded-sm border border-ink/10 overflow-hidden">
                 <Image
-                  src="/images/intro.jpg"
+                  src="/images/intro.jpg?v=20260304"
                   alt="InkSight 展示图"
                   fill
                   className="object-cover"
                   priority
+                  unoptimized
                 />
               </div>
             </div>
@@ -269,38 +299,107 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Showcase Section - 10 Modes */}
+      {/* Showcase Section */}
       <section className="border-t border-ink/10">
         <div className="mx-auto max-w-6xl px-6 py-20">
           <div className="text-center mb-14">
             <h2 className="font-serif text-3xl font-bold text-ink mb-3">
-              10 种内容模式
+              多种内容模式
             </h2>
             <p className="text-ink-light">
-              从哲学思辨到烟火日常，总有一款属于你的「慢信息」
+              从哲学思辨到烟火日常，总有一款属于你的「慢信息」，支持自定义模式，支持 AI 生成模式。
             </p>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
-            {modes.map((mode) => (
-              <Card
-                key={mode.name}
-                className="group p-5 hover:border-ink/20 transition-all duration-200 hover:-translate-y-0.5"
-              >
-                <CardContent className="p-0 text-center">
-                  <div className="inline-flex items-center justify-center w-10 h-10 rounded-sm bg-paper-dark mb-3 group-hover:bg-ink group-hover:text-white transition-colors">
-                    <mode.icon size={18} />
+
+          <div className="mb-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+            {coreModes.map((mode) => (
+              <div key={mode.name} className="aspect-square">
+                <Card className="group h-full p-3 md:p-4 hover:border-ink/20 transition-all duration-200 hover:-translate-y-0.5">
+                  <CardContent className="h-full p-0 text-center flex flex-col items-center">
+                    <div>
+                      <div className="inline-flex items-center justify-center w-9 h-9 md:w-10 md:h-10 rounded-sm bg-paper-dark mb-2.5 group-hover:bg-ink group-hover:text-white transition-colors">
+                        <mode.icon size={16} />
+                      </div>
+                      <h4 className="text-[10px] md:text-[11px] font-semibold text-ink tracking-wider uppercase mb-1">
+                        {mode.name}
+                      </h4>
+                      <p className="font-serif text-sm md:text-base font-medium text-ink mb-1 line-clamp-1">
+                        {mode.label}
+                      </p>
+                    </div>
+                    {Array.isArray(mode.descLines) && mode.descLines.length > 0 ? (
+                      <div className="mt-auto w-full text-[10px] md:text-[11px] text-ink-light leading-4 text-center">
+                        {mode.descLines.map((line) => (
+                          <span key={`${mode.name}-${line}`} className="block w-full text-center break-keep">
+                            {line}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-auto w-full text-[10px] md:text-[11px] text-ink-light leading-4 whitespace-normal break-keep text-center">
+                        {mode.desc}
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-10 gap-4">
+            {moreModes.slice(0, 8).map((mode) => (
+              <div key={mode.name} className="aspect-square">
+                <Card className="group h-full p-3 md:p-4 hover:border-ink/20 transition-all duration-200 hover:-translate-y-0.5">
+                  <CardContent className="h-full p-0 text-center flex flex-col items-center">
+                    <div className="inline-flex items-center justify-center w-9 h-9 rounded-sm bg-paper-dark mb-2.5 group-hover:bg-ink group-hover:text-white transition-colors">
+                      <mode.icon size={16} />
+                    </div>
+                    <h4 className="text-[9px] md:text-[10px] font-semibold text-ink tracking-wider uppercase mb-1">
+                      {mode.name}
+                    </h4>
+                    <p className="font-serif text-xs md:text-sm font-medium text-ink mb-1 leading-4 min-h-4 whitespace-nowrap">
+                      {mode.label}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+            ))}
+
+            <div className="aspect-square md:aspect-auto md:row-span-2 md:col-span-2 md:col-start-9 md:row-start-1">
+              <Card className="group h-full p-3 md:p-4 border-dashed hover:border-ink/30 transition-all duration-200 hover:-translate-y-0.5">
+                <CardContent className="h-full p-0 text-center flex flex-col items-center justify-center">
+                  <div className="inline-flex items-center justify-center w-10 h-10 md:w-12 md:h-12 rounded-sm border border-ink/20 mb-2.5 group-hover:bg-ink group-hover:text-white group-hover:border-ink transition-colors">
+                    <Plus size={18} />
                   </div>
-                  <h4 className="text-xs font-semibold text-ink tracking-wider uppercase mb-1">
-                    {mode.name}
+                  <h4 className="text-[10px] md:text-xs font-semibold text-ink tracking-wider uppercase mb-1">
+                    CUSTOM
                   </h4>
-                  <p className="text-sm font-medium text-ink mb-1">
-                    {mode.label}
+                  <p className="font-serif text-sm md:text-base font-medium text-ink mb-1">
+                    自定义模式
                   </p>
-                  <p className="text-xs text-ink-light leading-snug line-clamp-2">
-                    {mode.desc}
+                  <p className="text-[clamp(10px,0.9vw,12px)] text-ink-light leading-[1.35] whitespace-normal break-words text-balance">
+                    更多内容，由你定义
                   </p>
                 </CardContent>
               </Card>
+            </div>
+
+            {moreModes.slice(8).map((mode) => (
+              <div key={mode.name} className="aspect-square">
+                <Card className="group h-full p-3 md:p-4 hover:border-ink/20 transition-all duration-200 hover:-translate-y-0.5">
+                  <CardContent className="h-full p-0 text-center flex flex-col items-center">
+                    <div className="inline-flex items-center justify-center w-9 h-9 rounded-sm bg-paper-dark mb-2.5 group-hover:bg-ink group-hover:text-white transition-colors">
+                      <mode.icon size={16} />
+                    </div>
+                    <h4 className="text-[9px] md:text-[10px] font-semibold text-ink tracking-wider uppercase mb-1">
+                      {mode.name}
+                    </h4>
+                    <p className="font-serif text-xs md:text-sm font-medium text-ink mb-1 leading-4 min-h-4 whitespace-nowrap">
+                      {mode.label}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
             ))}
           </div>
         </div>
@@ -346,6 +445,11 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link href="/flash">
               <Button size="lg">在线刷机</Button>
+            </Link>
+            <Link href="/config">
+              <Button variant="outline" size="lg">
+                设备配置
+              </Button>
             </Link>
             <a
               href="https://github.com/datascale-ai/inksight"

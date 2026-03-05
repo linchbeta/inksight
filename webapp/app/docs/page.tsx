@@ -113,8 +113,8 @@ export default function DocsPage() {
 git clone https://github.com/datascale-ai/inksight.git
 cd inksight/firmware
 
-# 使用 PlatformIO 编译并上传固件
-pio run --target upload
+# 编译并烧录固件（默认 4.2 寸屏，其他尺寸可选 epd_29 / epd_583 / epd_75）
+pio run -e epd_42 --target upload
 
 # 查看串口日志（验证固件运行正常）
 pio device monitor`}</code>
@@ -132,10 +132,10 @@ pio device monitor`}</code>
 
       <ol>
         <li>
-          设备启动后，会创建一个名为 <code>InkSight-XXXXXX</code> 的 WiFi
+          设备启动后，会创建一个名为 <code>InkSight-XXXXX</code> 的 WiFi
           热点
         </li>
-        <li>用手机连接该热点，系统会自动弹出配置页面</li>
+        <li>用手机/电脑连接该热点，系统会自动弹出配置页面</li>
         <li>选择你的家庭 WiFi 网络，输入密码</li>
         <li>配置完成后，设备会自动连接网络并开始工作</li>
       </ol>
@@ -177,7 +177,7 @@ python -m uvicorn api.index:app --host 0.0.0.0 --port 8080`}</code>
 
       <p>
         恭喜！你的 InkSight 已经可以正常工作了。接下来可以通过{" "}
-        <Link href="/docs/config">Web 配置后台</Link>{" "}
+        <Link href="/docs/config">Web 在线配置</Link>{" "}
         自定义内容模式、刷新策略和显示风格。
       </p>
     </article>

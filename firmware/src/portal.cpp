@@ -95,18 +95,48 @@ void startCaptivePortal() {
         int n = WiFi.scanNetworks();
         Serial.printf("Found %d networks\n", n);
 
-        String json = "{\"networks\":[";
+        // Deduplicate by SSID, keeping the strongest signal
+        struct NetInfo { String ssid; int rssi; bool secure; };
+        NetInfo best[32];
+        int count = 0;
         for (int i = 0; i < n; i++) {
+            String ssid = WiFi.SSID(i);
+            if (ssid.length() == 0) continue;
+            int rssi = WiFi.RSSI(i);
+            bool secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+            int found = -1;
+            for (int j = 0; j < count; j++) {
+                if (best[j].ssid == ssid) { found = j; break; }
+            }
+            if (found >= 0) {
+                if (rssi > best[found].rssi) {
+                    best[found].rssi = rssi;
+                    best[found].secure = secure;
+                }
+            } else if (count < 32) {
+                best[count++] = { ssid, rssi, secure };
+            }
+        }
+
+        // Sort by signal strength (strongest first)
+        for (int i = 0; i < count - 1; i++)
+            for (int j = i + 1; j < count; j++)
+                if (best[j].rssi > best[i].rssi) {
+                    NetInfo tmp = best[i]; best[i] = best[j]; best[j] = tmp;
+                }
+
+        String json = "{\"networks\":[";
+        for (int i = 0; i < count; i++) {
             if (i > 0) json += ",";
-            json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",";
-            json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
-            json += "\"secure\":" + String(WiFi.encryptionType(i) != WIFI_AUTH_OPEN ? "true" : "false") + "}";
+            json += "{\"ssid\":\"" + best[i].ssid + "\",";
+            json += "\"rssi\":" + String(best[i].rssi) + ",";
+            json += "\"secure\":" + String(best[i].secure ? "true" : "false") + "}";
         }
         json += "]}";
 
         webServer.sendHeader("Access-Control-Allow-Origin", "*");
         webServer.send(200, "application/json", json);
-        Serial.println("Scan response sent");
+        Serial.printf("Scan response sent (%d unique networks)\n", count);
     });
 
     // ── Route: Device info ──────────────────────────────────
@@ -180,6 +210,10 @@ void startCaptivePortal() {
             lastWifiError = "";
             Serial.printf("WiFi OK  IP=%s\n", WiFi.localIP().toString().c_str());
             webServer.send(200, "application/json", "{\"ok\":true}");
+
+            pendingRestart  = true;
+            restartAtMillis = millis() + 15000;
+            Serial.println("Restart scheduled in 15s (or earlier via /restart)");
         } else {
             uint8_t reason = WiFi.status();
             if (reason == WL_NO_SSID_AVAIL) {

@@ -49,6 +49,7 @@ class ModeInfo:
     cacheable: bool = True
     description: str = ""
     source: str = "builtin"  # "builtin" | "builtin_json" | "custom"
+    settings_schema: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -130,6 +131,7 @@ class ModeRegistry:
             cacheable=definition.get("cacheable", True),
             description=definition.get("description", ""),
             source=source,
+            settings_schema=definition.get("settings_schema", []) if isinstance(definition.get("settings_schema", []), list) else [],
         )
         self._json_modes[mode_id] = JsonMode(
             info=info, definition=definition, file_path=path

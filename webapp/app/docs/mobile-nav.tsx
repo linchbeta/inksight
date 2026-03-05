@@ -9,6 +9,7 @@ const sidebarSections = [
     title: "入门",
     items: [
       { label: "项目介绍", href: "/docs" },
+      { label: "架构说明", href: "/docs/architecture" },
       { label: "硬件清单", href: "/docs/hardware" },
       { label: "组装指南", href: "/docs/assembly" },
     ],
@@ -17,8 +18,9 @@ const sidebarSections = [
     title: "使用",
     items: [
       { label: "Web 在线刷机", href: "/docs/flash" },
+      { label: "按键说明", href: "/docs/button-controls" },
       { label: "配置 API Key", href: "/docs/api-key" },
-      { label: "Web 配置后台", href: "/docs/config" },
+      { label: "Web 在线配置", href: "/docs/config" },
     ],
   },
   {

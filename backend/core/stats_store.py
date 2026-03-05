@@ -10,6 +10,7 @@ import os
 import logging
 import aiosqlite
 from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,38 @@ async def log_heartbeat(mac: str, battery_voltage: float, wifi_rssi: int | None 
         (mac, mac),
     )
     await db.commit()
+
+
+async def get_latest_battery_voltage(mac: str) -> float | None:
+    db = await get_main_db()
+    cursor = await db.execute(
+        """SELECT battery_voltage FROM device_heartbeats
+           WHERE mac = ? AND battery_voltage IS NOT NULL
+           ORDER BY created_at DESC LIMIT 1""",
+        (mac,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    return float(row[0])
+
+
+async def get_latest_heartbeat(mac: str) -> dict | None:
+    db = await get_main_db()
+    cursor = await db.execute(
+        """SELECT battery_voltage, wifi_rssi, created_at FROM device_heartbeats
+           WHERE mac = ?
+           ORDER BY created_at DESC LIMIT 1""",
+        (mac,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    return {
+        "battery_voltage": float(row[0]) if row[0] is not None else None,
+        "wifi_rssi": row[1],
+        "created_at": row[2],
+    }
 
 
 async def get_device_stats(mac: str) -> dict:
@@ -267,15 +300,34 @@ def _compute_content_hash(content: dict | str | None) -> str:
     """Compute a short hash for content deduplication."""
     if content is None:
         return ""
-    text = json.dumps(content, sort_keys=True, ensure_ascii=False) if isinstance(content, dict) else str(content)
+    safe_content = _to_json_safe(content) if isinstance(content, dict) else content
+    text = json.dumps(safe_content, sort_keys=True, ensure_ascii=False) if isinstance(safe_content, dict) else str(safe_content)
     return hashlib.md5(text.encode()).hexdigest()[:12]
+
+
+def _to_json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for k, v in value.items():
+            if isinstance(k, str) and k.startswith("_prefetched_"):
+                continue
+            safe[k] = _to_json_safe(v)
+        return safe
+    if isinstance(value, list):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, bytes):
+        return f"<bytes:{len(value)}>"
+    return value
 
 
 async def save_render_content(mac: str, mode_id: str, content: dict | None):
     """Save rendered content to history for dedup and browsing."""
     now = datetime.now().isoformat()
-    content_str = json.dumps(content, ensure_ascii=False) if content else "{}"
-    content_hash = _compute_content_hash(content)
+    safe_content = _to_json_safe(content) if content else {}
+    content_str = json.dumps(safe_content, ensure_ascii=False) if safe_content else "{}"
+    content_hash = _compute_content_hash(safe_content)
     db = await get_main_db()
     await db.execute(
         """INSERT INTO content_history (mac, mode_id, content, content_hash, created_at)

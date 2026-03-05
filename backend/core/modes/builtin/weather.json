@@ -4,6 +4,17 @@
   "icon": "weather",
   "cacheable": false,
   "description": "当日天气 + 未来3天预报 + 穿衣建议",
+  "settings_schema": [
+    {
+      "key": "forecast_days",
+      "label": "预报天数",
+      "type": "number",
+      "default": 3,
+      "min": 1,
+      "max": 7,
+      "step": 1
+    }
+  ],
   "content": {
     "type": "composite",
     "steps": [

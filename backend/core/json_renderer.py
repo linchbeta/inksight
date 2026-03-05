@@ -16,6 +16,7 @@ from .config import SCREEN_WIDTH, SCREEN_HEIGHT
 from .patterns.utils import (
     EINK_BG,
     EINK_FG,
+    apply_text_fontmode,
     draw_status_bar,
     draw_footer,
     draw_dashed_line,
@@ -127,6 +128,7 @@ def render_json_mode(
     """Render a JSON-defined mode to a 1-bit e-ink image."""
     img = Image.new("1", (screen_w, screen_h), EINK_BG)
     draw = ImageDraw.Draw(img)
+    apply_text_fontmode(draw)
     layout = mode_def.get("layout", {})
 
     # Select screen-size-specific layout override if available
@@ -175,6 +177,7 @@ def render_json_mode(
             screen_w=screen_w, screen_h=screen_h,
             y=status_bar_bottom, footer_height=footer_height,
         )
+        apply_text_fontmode(measure_ctx.draw)
         for block in body:
             if measure_ctx.y >= footer_top - 10:
                 break

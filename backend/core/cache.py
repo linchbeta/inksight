@@ -34,12 +34,11 @@ async def init_cache_db():
 from .config import (
     SCREEN_WIDTH,
     SCREEN_HEIGHT,
-    DEFAULT_CITY,
     DEFAULT_MODES,
     get_cacheable_modes,
 )
 from .context import get_date_context, get_weather, calc_battery_pct
-from .pipeline import generate_and_render
+from .pipeline import generate_and_render, get_effective_mode_config
 
 
 class ContentCache:
@@ -149,6 +148,25 @@ class ContentCache:
 
         return False
 
+    async def force_regenerate_all(
+        self, mac: str, config: dict, v: float = 3.3,
+        screen_w: int = SCREEN_WIDTH, screen_h: int = SCREEN_HEIGHT,
+    ) -> bool:
+        """Force background regeneration for all cacheable modes."""
+        cacheable = get_cacheable_modes()
+        modes = [m.upper() for m in config.get("modes", DEFAULT_MODES) if m.upper() in cacheable]
+        if not modes:
+            return False
+        if mac in self._regenerating:
+            logger.debug(f"[CACHE] Background regeneration already in progress for {mac}")
+            return False
+        self._regenerating.add(mac)
+        logger.info(f"[CACHE] Force regenerating all {len(modes)} modes for {mac}...")
+        asyncio.create_task(
+            self._regenerate_background(mac, config, modes, v, screen_w, screen_h)
+        )
+        return True
+
     async def _regenerate_background(
         self, mac: str, config: dict, modes: list[str], v: float,
         screen_w: int = SCREEN_WIDTH, screen_h: int = SCREEN_HEIGHT,
@@ -167,16 +185,11 @@ class ContentCache:
     ):
         """Generate and cache all modes"""
         battery_pct = calc_battery_pct(v)
-        city = config.get("city", DEFAULT_CITY)
-
-        date_ctx, weather = await asyncio.gather(
-            get_date_context(),
-            get_weather(city=city),
-        )
+        date_ctx = await get_date_context()
 
         tasks = [
             self._generate_single_mode(
-                mac, persona, battery_pct, copy.deepcopy(config), copy.deepcopy(date_ctx), copy.deepcopy(weather),
+                mac, persona, battery_pct, copy.deepcopy(config), copy.deepcopy(date_ctx),
                 screen_w, screen_h,
             )
             for persona in modes
@@ -193,13 +206,27 @@ class ContentCache:
         battery_pct: float,
         config: dict,
         date_ctx: dict,
-        weather: dict,
+        *args,
         screen_w: int = SCREEN_WIDTH,
         screen_h: int = SCREEN_HEIGHT,
     ) -> bool:
         """Generate and cache a single mode via the unified pipeline."""
         try:
             logger.info(f"[CACHE] Generating {mac}:{persona}...")
+            if args:
+                if isinstance(args[0], dict):
+                    if len(args) >= 2 and isinstance(args[1], int):
+                        screen_w = args[1]
+                    if len(args) >= 3 and isinstance(args[2], int):
+                        screen_h = args[2]
+                else:
+                    if isinstance(args[0], int):
+                        screen_w = args[0]
+                    if len(args) >= 2 and isinstance(args[1], int):
+                        screen_h = args[1]
+            effective_cfg = get_effective_mode_config(config, persona)
+            city = effective_cfg.get("city")
+            weather = await get_weather(city=city)
 
             img, _content = await generate_and_render(
                 persona, config, date_ctx, weather, battery_pct,

@@ -15,10 +15,14 @@ bool connectWiFi();
 
 // Fetch BMP image from backend and store in imgBuf. Returns true on success.
 // If nextMode is true, appends &next=1 to request the next mode in sequence.
-bool fetchBMP(bool nextMode = false);
+bool fetchBMP(bool nextMode = false, bool *isFallback = nullptr);
 
-// POST favorite (triple-click) to backend. Returns true on success.
-bool postFavorite();
+// Check whether backend has pending refresh/switch request for this device.
+// If shouldExitLive is not null, it is set to true when backend runtime_mode is interval.
+bool hasPendingRemoteAction(bool *shouldExitLive = nullptr);
+
+// POST runtime mode (active/interval) to backend.
+bool postRuntimeMode(const char *mode);
 
 // POST device config JSON to backend /api/config endpoint.
 void postConfigToBackend();

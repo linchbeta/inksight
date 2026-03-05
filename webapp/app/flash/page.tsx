@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Usb,
@@ -12,7 +12,17 @@ import {
   Wifi,
   Terminal,
   RefreshCw,
+  X,
 } from "lucide-react";
+import { authHeaders } from "@/lib/auth";
+
+declare global {
+  interface Navigator {
+    serial?: {
+      requestPort(options?: object): Promise<unknown>;
+    };
+  }
+}
 
 const steps = [
   {
@@ -77,24 +87,27 @@ const FLASH_STATUS_LABEL: Record<FlashStatus, string> = {
 };
 
 export default function FlashPage() {
-  const [scriptLoaded, setScriptLoaded] = useState(false);
   const [status, setStatus] = useState<FlashStatus>("initializing");
   const [releases, setReleases] = useState<FirmwareRelease[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>("");
-  const [manifestUrl, setManifestUrl] = useState<string>("");
   const [releaseError, setReleaseError] = useState<string>("");
   const [manualFirmwareUrl, setManualFirmwareUrl] = useState<string>("");
   const [useManualFirmware, setUseManualFirmware] = useState<boolean>(false);
   const [manualUrlVerified, setManualUrlVerified] = useState<boolean>(false);
   const [manualUrlVerifying, setManualUrlVerifying] = useState<boolean>(false);
   const [manualUrlMessage, setManualUrlMessage] = useState<string>("");
+  const [flashProgress, setFlashProgress] = useState<number>(0);
+  const [serialSupported, setSerialSupported] = useState<boolean | null>(null);
   const [logs, setLogs] = useState<string[]>([
     "[系统] InkSight Web Flasher 已就绪",
     "[提示] 请使用 Chrome 或 Edge 浏览器以获得最佳体验",
     "[提示] 确保已安装 ESP32 USB 驱动程序",
   ]);
+  const [showPostFlashGuide, setShowPostFlashGuide] = useState(false);
+  const [authState, setAuthState] = useState<"checking" | "logged_in" | "guest">("checking");
+  const [skipLoginGate, setSkipLoginGate] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
-  const installButtonRef = useRef<HTMLElement | null>(null);
+  const transportRef = useRef<InstanceType<typeof import("esptool-js").Transport> | null>(null);
 
   const parseApiJson = async (res: Response) => {
     const contentType = res.headers.get("content-type") || "";
@@ -109,27 +122,19 @@ export default function FlashPage() {
   };
 
   useEffect(() => {
-    const script = document.createElement("script");
-    script.type = "module";
-    script.src =
-      "https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module";
-    script.onload = () => {
-      setScriptLoaded(true);
-      setStatus((prev) => (prev === "loading_releases" ? prev : "ready"));
-      setLogs((prev) => [...prev, "[系统] ESP Web Tools 加载完成"]);
-    };
-    script.onerror = () => {
-      setStatus("failed");
-      setLogs((prev) => [
-        ...prev,
-        "[错误] ESP Web Tools 加载失败，请检查网络连接",
-      ]);
-    };
-    document.head.appendChild(script);
+    setSerialSupported(!!navigator.serial);
+  }, []);
 
-    return () => {
-      document.head.removeChild(script);
-    };
+  useEffect(() => {
+    fetch("/api/auth/me", { headers: authHeaders() })
+      .then((r) => {
+        if (r.ok) {
+          setAuthState("logged_in");
+          return;
+        }
+        setAuthState("guest");
+      })
+      .catch(() => setAuthState("guest"));
   }, []);
 
   useEffect(() => {
@@ -141,130 +146,54 @@ export default function FlashPage() {
     const loadReleases = async () => {
       setStatus("loading_releases");
       setReleaseError("");
-
       try {
         const res = await fetch(endpoint, { cache: "no-store" });
         const data = await parseApiJson(res);
         if (!res.ok) {
           throw new Error(data?.message || "固件版本接口请求失败");
         }
-
         const list = (data?.releases || []) as FirmwareRelease[];
         if (!list.length) {
           throw new Error("没有可用的固件版本，请先发布 GitHub Release");
         }
-
         setReleases(list);
         setSelectedVersion(list[0].version);
         setLogs((prev) => [
           ...prev,
           `[系统] 已加载 ${list.length} 个固件版本，默认选择 v${list[0].version}`,
         ]);
-        setStatus(scriptLoaded ? "ready" : "initializing");
+        setStatus("ready");
       } catch (err) {
         const message = err instanceof Error ? err.message : "加载固件版本失败";
         setReleaseError(message);
         setUseManualFirmware(true);
-        setStatus("failed");
+        setStatus("ready");
         setLogs((prev) => [...prev, `[错误] ${message}`]);
         setLogs((prev) => [...prev, "[提示] 你可以切换到手动 URL 模式继续刷机"]);
       }
     };
 
     loadReleases();
-  }, [scriptLoaded]);
+  }, []);
 
   useEffect(() => {
-    if (useManualFirmware) {
-      if (!manualFirmwareUrl || !manualUrlVerified) {
-        return;
-      }
-      const manifest = {
-        name: "InkSight",
-        version: "manual",
-        builds: [
-          {
-            chipFamily: "ESP32-C3",
-            parts: [{ path: manualFirmwareUrl, offset: 0 }],
-          },
-        ],
-      };
-      const blob = new Blob([JSON.stringify(manifest)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      setManifestUrl(url);
-      setLogs((prev) => [...prev, "[系统] 已启用手动固件 URL 刷写模式"]);
-      return () => {
-        URL.revokeObjectURL(url);
-      };
+    const el = logEndRef.current;
+    if (el?.parentElement) {
+      el.parentElement.scrollTop = el.parentElement.scrollHeight;
     }
-
-    if (!releases.length || !selectedVersion) {
-      return;
-    }
-    const selected = releases.find((r) => r.version === selectedVersion);
-    if (!selected) {
-      return;
-    }
-    const blob = new Blob([JSON.stringify(selected.manifest)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    setManifestUrl(url);
-    setLogs((prev) => [...prev, `[系统] 已切换固件版本 v${selected.version}`]);
-
-    return () => {
-      URL.revokeObjectURL(url);
-    };
-  }, [releases, selectedVersion, useManualFirmware, manualFirmwareUrl, manualUrlVerified]);
-
-  useEffect(() => {
-    const node = installButtonRef.current;
-    if (!node) return;
-
-    const onInstallStart = () => {
-      setStatus("flashing");
-      setLogs((prev) => [...prev, "[系统] 开始刷写固件，请勿断开 USB 连接"]);
-    };
-    const onInstallDone = () => {
-      setStatus("success");
-      setLogs((prev) => [...prev, "[系统] 固件刷写完成，设备即将重启"]);
-    };
-    const onInstallError = (event: Event) => {
-      setStatus("failed");
-      const detail = (event as CustomEvent)?.detail;
-      const reason = typeof detail === "string" ? detail : "串口连接或刷写失败";
-      setLogs((prev) => [...prev, `[错误] ${reason}`]);
-    };
-
-    node.addEventListener("state-changed", onInstallStart as EventListener);
-    node.addEventListener("install-start", onInstallStart as EventListener);
-    node.addEventListener("install-complete", onInstallDone as EventListener);
-    node.addEventListener("install-error", onInstallError as EventListener);
-    node.addEventListener("error", onInstallError as EventListener);
-
-    return () => {
-      node.removeEventListener("state-changed", onInstallStart as EventListener);
-      node.removeEventListener("install-start", onInstallStart as EventListener);
-      node.removeEventListener("install-complete", onInstallDone as EventListener);
-      node.removeEventListener("install-error", onInstallError as EventListener);
-      node.removeEventListener("error", onInstallError as EventListener);
-    };
-  }, [manifestUrl]);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const addLog = (msg: string) => {
+  const addLog = useCallback((msg: string) => {
     setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
-  };
+  }, []);
 
   const selectedRelease = releases.find((r) => r.version === selectedVersion);
-  const sizeMB = selectedRelease?.size_bytes
-    ? (selectedRelease.size_bytes / (1024 * 1024)).toFixed(2)
-    : null;
+  const [actualChip, setActualChip] = useState<string | null>(null);
+  const [actualSizeMB, setActualSizeMB] = useState<string | null>(null);
+  const sizeMB = actualSizeMB
+    ?? (selectedRelease?.size_bytes
+      ? (selectedRelease.size_bytes / (1024 * 1024)).toFixed(2)
+      : null);
 
   const handleReloadReleases = async () => {
     const apiBase = process.env.NEXT_PUBLIC_FIRMWARE_API_BASE?.replace(/\/$/, "");
@@ -286,7 +215,7 @@ export default function FlashPage() {
       setReleases(list);
       setSelectedVersion(list[0].version);
       setUseManualFirmware(false);
-      setStatus(scriptLoaded ? "ready" : "initializing");
+      setStatus("ready");
       setLogs((prev) => [...prev, "[系统] 已刷新固件版本列表"]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "刷新固件版本失败";
@@ -337,6 +266,9 @@ export default function FlashPage() {
       }
       setManualUrlVerified(true);
       setManualUrlMessage("链接校验通过，可以开始刷写");
+      if (data.content_length) {
+        setActualSizeMB((Number(data.content_length) / (1024 * 1024)).toFixed(2));
+      }
       setLogs((prev) => [...prev, "[系统] 手动固件 URL 校验通过"]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "固件 URL 校验失败";
@@ -348,9 +280,147 @@ export default function FlashPage() {
     }
   };
 
+  const getFirmwareUrl = (): string | null => {
+    if (useManualFirmware) {
+      if (!manualFirmwareUrl || !manualUrlVerified) return null;
+      return `${window.location.origin}/api/firmware/download?url=${encodeURIComponent(manualFirmwareUrl)}`;
+    }
+    const selected = releases.find((r) => r.version === selectedVersion);
+    if (!selected) return null;
+    const build = selected.manifest.builds.find(
+      (b) => b.chipFamily.toUpperCase() === "ESP32-C3"
+    );
+    if (!build || !build.parts.length) return null;
+    const rawUrl = build.parts[0].path;
+    return `${window.location.origin}/api/firmware/download?url=${encodeURIComponent(rawUrl)}`;
+  };
+
+  const handleFlash = async () => {
+    if (!navigator.serial) {
+      addLog("浏览器不支持 WebSerial API，请使用 Chrome 或 Edge");
+      setStatus("failed");
+      return;
+    }
+
+    const firmwareUrl = getFirmwareUrl();
+    if (!firmwareUrl) {
+      addLog("无法确定固件下载地址");
+      setStatus("failed");
+      return;
+    }
+
+    setStatus("connecting");
+    setActualChip(null);
+    setActualSizeMB(null);
+    addLog("正在请求串口权限...");
+
+    let port: unknown;
+    try {
+      port = await navigator.serial.requestPort();
+    } catch (e) {
+      addLog("用户取消了串口选择或无可用串口");
+      setStatus("ready");
+      return;
+    }
+
+    addLog("串口已选择，正在连接设备...");
+
+    try {
+      const { ESPLoader, Transport } = await import("esptool-js");
+
+      const transport = new Transport(port as ConstructorParameters<typeof Transport>[0], true);
+      transportRef.current = transport;
+
+      const loaderTerminal = {
+        clean() { /* no-op */ },
+        writeLine(data: string) { addLog(data); },
+        write(data: string) {
+          if (data.trim()) addLog(data.trim());
+        },
+      };
+
+      const esploader = new ESPLoader({
+        transport,
+        baudrate: 115200,
+        romBaudrate: 115200,
+        terminal: loaderTerminal,
+      });
+
+      const chip = await esploader.main();
+      setActualChip(chip);
+      addLog(`已连接: ${chip}`);
+
+      addLog("正在下载固件...");
+      const fwResp = await fetch(firmwareUrl);
+      if (!fwResp.ok) {
+        throw new Error(`固件下载失败: HTTP ${fwResp.status}`);
+      }
+      const fwBuffer = await fwResp.arrayBuffer();
+      const fwData = new Uint8Array(fwBuffer);
+      const fwBinaryStr = Array.from(fwData, (b) => String.fromCharCode(b)).join("");
+      setActualSizeMB((fwData.length / (1024 * 1024)).toFixed(2));
+      addLog(`固件下载完成: ${(fwData.length / 1024).toFixed(0)} KB`);
+
+      setStatus("flashing");
+      setFlashProgress(0);
+      addLog("开始刷写固件，请勿断开 USB 连接...");
+
+      const header = Array.from(fwData.slice(0, 16), b => b.toString(16).padStart(2, "0")).join(" ");
+      addLog(`固件头部: ${header}`);
+
+      await esploader.writeFlash({
+        fileArray: [{ data: fwBinaryStr, address: 0x0 }],
+        flashSize: "keep",
+        flashMode: "keep",
+        flashFreq: "keep",
+        eraseAll: false,
+        compress: true,
+        reportProgress: (_fileIndex: number, written: number, total: number) => {
+          const pct = Math.round((written / total) * 100);
+          setFlashProgress(pct);
+        },
+      });
+
+      addLog("固件写入完成，正在重启设备...");
+      try {
+        await transport.setRTS(true);
+        await new Promise((r) => setTimeout(r, 100));
+        await transport.setRTS(false);
+        await new Promise((r) => setTimeout(r, 50));
+      } catch { /* RTS toggle may fail on some adapters */ }
+
+      try {
+        await transport.disconnect();
+      } catch { /* port may already be closed */ }
+      transportRef.current = null;
+
+      setStatus("success");
+      setShowPostFlashGuide(true);
+      addLog("刷写成功！设备已重启，请按引导完成配网。");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addLog(`刷写失败: ${msg}`);
+      setStatus("failed");
+      try {
+        if (transportRef.current) {
+          await transportRef.current.disconnect();
+          transportRef.current = null;
+        }
+      } catch { /* ignore */ }
+    }
+  };
+
+  const canFlash =
+    status === "ready" || status === "failed" || status === "success"
+      ? useManualFirmware
+        ? manualFirmwareUrl && manualUrlVerified
+        : !!selectedVersion
+      : false;
+  const loginGateActive = authState === "guest" && !skipLoginGate;
+  const canStartFlash = canFlash && authState !== "checking" && !loginGateActive;
+
   return (
     <div className="mx-auto max-w-6xl px-6 py-16">
-      {/* Page Header */}
       <div className="text-center mb-16">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-sm border border-ink/10 bg-paper-dark mb-5">
           <Zap size={24} className="text-ink" />
@@ -397,7 +467,6 @@ export default function FlashPage() {
             ))}
           </div>
 
-          {/* Requirements */}
           <div className="mt-8 p-4 rounded-sm border border-ink/10 bg-paper">
             <h3 className="text-sm font-semibold text-ink mb-2 flex items-center gap-2">
               <AlertCircle size={14} />
@@ -431,15 +500,15 @@ export default function FlashPage() {
             固件烧录
           </h2>
 
-          {/* Flash Card */}
           <div className="rounded-sm border border-ink/10 bg-white p-8 text-center">
             <div className="mb-6">
               <div className="inline-flex items-center gap-2 text-sm text-ink-light mb-2">
-                <CheckCircle2 size={14} className="text-green-600" />
+                <CheckCircle2 size={14} className={status === "success" ? "text-green-600" : status === "failed" ? "text-red-500" : status === "flashing" ? "text-amber-500 animate-pulse" : "text-ink-light"} />
                 当前状态: {FLASH_STATUS_LABEL[status]}
+                {status === "flashing" ? ` ${flashProgress}%` : ""}
               </div>
               <p className="text-xs text-ink-light">
-                芯片: {selectedRelease?.chip_family ?? "ESP32-C3"} &middot; 固件大小:{" "}
+                芯片: {actualChip ?? selectedRelease?.chip_family ?? "ESP32-C3"} &middot; 固件大小:{" "}
                 {sizeMB ? `${sizeMB} MB` : "未知"}
               </p>
             </div>
@@ -530,75 +599,114 @@ export default function FlashPage() {
                 </Button>
               </div>
               )}
-              {releaseError ? (
+              {!useManualFirmware && releaseError ? (
                 <p className="mt-2 text-xs text-red-600 text-left">
                   固件版本加载失败：{releaseError}
                 </p>
               ) : null}
-              {process.env.NEXT_PUBLIC_FIRMWARE_API_BASE ? null : (
+              {!process.env.NEXT_PUBLIC_FIRMWARE_API_BASE && !useManualFirmware ? (
                 <p className="mt-2 text-xs text-ink-light text-left">
-                  未配置 `NEXT_PUBLIC_FIRMWARE_API_BASE` 时，默认请求当前域名下
-                  `/api/firmware/releases`。
+                  未配置 NEXT_PUBLIC_FIRMWARE_API_BASE 环境变量：GitHub Releases 列表会走当前站点的 /api/firmware/releases。
                 </p>
+              ) : null}
+            </div>
+
+            {/* Flash button */}
+            <div className="mb-6">
+              {authState === "checking" ? (
+                <div className="mb-3 p-3 rounded-sm border border-ink/10 bg-paper text-sm text-ink-light">
+                  正在检查登录状态...
+                </div>
+              ) : authState === "guest" && !skipLoginGate ? (
+                <div className="mb-3 p-3 rounded-sm border border-amber-200 bg-amber-50 text-left">
+                  <p className="text-sm text-amber-800">建议先登录，再开始刷机</p>
+                  <p className="mt-1 text-xs text-amber-700">
+                    登录后可更顺畅完成 刷机 -&gt; 配网 -&gt; 在线配置。
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        window.location.href = `/login?next=${encodeURIComponent("/flash")}`;
+                      }}
+                    >
+                      登录后继续
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setSkipLoginGate(true);
+                        addLog("已选择跳过登录，继续刷机");
+                      }}
+                    >
+                      跳过登录，直接刷机
+                    </Button>
+                  </div>
+                </div>
+              ) : authState === "logged_in" ? (
+                <div className="mb-3 p-3 rounded-sm border border-green-200 bg-green-50 text-sm text-green-700">
+                  已登录，可直接完成刷机后的在线配置流程。
+                </div>
+              ) : null}
+
+              {serialSupported === false ? (
+                <div className="p-4 rounded-sm border border-red-200 bg-red-50 text-sm text-red-700">
+                  <AlertCircle size={16} className="inline mr-2 align-text-bottom" />
+                  你的浏览器不支持 WebSerial API，请使用 Chrome 或 Edge 浏览器。
+                </div>
+              ) : (
+                <Button
+                  size="lg"
+                  className="w-full max-w-xs"
+                  onClick={handleFlash}
+                  disabled={!canStartFlash || status === "connecting" || status === "flashing"}
+                >
+                  {status === "connecting"
+                    ? "正在连接..."
+                    : status === "flashing"
+                    ? `刷写中 ${flashProgress}%`
+                    : "刷写固件"}
+                </Button>
+              )}
+
+              {status === "flashing" && (
+                <div className="mt-3 w-full max-w-xs mx-auto">
+                  <div className="h-2 bg-ink/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-ink transition-all duration-300 rounded-full"
+                      style={{ width: `${flashProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-ink-light mt-1">{flashProgress}%</p>
+                </div>
               )}
             </div>
 
-            {/* ESP Web Install Button */}
-            <div className="mb-6">
-              {/* @ts-expect-error esp-web-install-button is a custom element */}
-              <esp-web-install-button
-                ref={installButtonRef}
-                manifest={manifestUrl}
-              >
-                <Button
-                  slot="activate"
-                  size="lg"
-                  className="w-full max-w-xs"
-                  onClick={() => {
-                    setStatus("connecting");
-                    addLog("正在连接设备...");
-                  }}
-                  disabled={
-                    !scriptLoaded ||
-                    !manifestUrl ||
-                    status === "loading_releases" ||
-                    (useManualFirmware && (!manualFirmwareUrl || !manualUrlVerified))
-                  }
-                >
-                  {scriptLoaded && manifestUrl
-                    ? useManualFirmware
-                      ? "刷写手动固件"
-                      : `刷写 v${selectedVersion || "latest"}`
-                    : "正在加载工具..."}
-                </Button>
-                <span slot="unsupported">
-                  <div className="p-4 rounded-sm border border-red-200 bg-red-50 text-sm text-red-700">
-                    <AlertCircle
-                      size={16}
-                      className="inline mr-2 align-text-bottom"
-                    />
-                    你的浏览器不支持 WebSerial API，请使用 Chrome 或 Edge
-                    浏览器。
-                  </div>
-                </span>
-                <span slot="not-allowed">
-                  <div className="p-4 rounded-sm border border-yellow-200 bg-yellow-50 text-sm text-yellow-700">
-                    <AlertCircle
-                      size={16}
-                      className="inline mr-2 align-text-bottom"
-                    />
-                    请确保通过 HTTPS 访问此页面。
-                  </div>
-                </span>
-              {/* @ts-expect-error esp-web-install-button is a custom element */}
-              </esp-web-install-button>
-            </div>
-
             {/* Post-flash info */}
-            <div className="flex items-center justify-center gap-2 text-sm text-ink-light">
-              <Wifi size={14} />
-              <span>刷写完成后，设备将自动进入 WiFi 配网模式</span>
-            </div>
+            {status === "success" ? (
+              <div className="mt-4 rounded-sm border border-green-200 bg-green-50 p-5 text-left">
+                <h3 className="text-sm font-semibold text-green-800 mb-3 flex items-center gap-2">
+                  <CheckCircle2 size={16} />
+                  刷写成功 — 下一步配网
+                </h3>
+                <ol className="space-y-2 text-sm text-green-700 list-decimal list-inside">
+                  <li>断开 USB，给设备上电</li>
+                  <li>在手机/电脑 WiFi 列表中找到 <code className="bg-white px-1.5 py-0.5 rounded text-xs font-mono">InkSight-XXXX</code> 热点并连接</li>
+                  <li>浏览器会自动弹出配网页面（如未弹出，手动访问 <code className="bg-white px-1.5 py-0.5 rounded text-xs font-mono">192.168.4.1</code>）</li>
+                  <li>在配网页面输入 WiFi 和服务器地址后保存</li>
+                  <li>保存成功后，配网页面底部会显示<strong>「打开配置页面」</strong>链接（已带设备标识），点击即可进行个性化配置</li>
+                </ol>
+                {status === "success" ? (
+                  <div className="mt-4">
+                    <Button size="sm" onClick={() => window.open("/config", "_blank")}>
+                      前往配置页面
+                    </Button>
+                    <p className="mt-2 text-xs text-green-600">配置页面会自动检测设备上线</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {/* Console Log */}
@@ -607,7 +715,7 @@ export default function FlashPage() {
               <Terminal size={14} />
               控制台日志
             </h3>
-            <div className="rounded-sm border border-ink/10 bg-ink text-green-400 font-mono text-xs p-4 h-48 overflow-y-auto">
+            <div className="ink-strong-select rounded-sm border border-ink/10 bg-ink text-green-400 font-mono text-xs p-4 h-48 overflow-y-auto">
               {logs.map((log, i) => (
                 <div key={i} className="py-0.5 leading-relaxed">
                   {log}
@@ -618,6 +726,55 @@ export default function FlashPage() {
           </div>
         </div>
       </div>
+
+      {/* Post-flash guide dialog */}
+      {showPostFlashGuide && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowPostFlashGuide(false)} />
+          <div className="relative z-10 w-full max-w-md mx-4 animate-fade-in">
+            <div className="rounded-sm border border-ink/10 bg-white p-6 shadow-lg">
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={20} className="text-green-600" />
+                  <h2 className="text-lg font-semibold text-ink">刷写成功</h2>
+                </div>
+                <button onClick={() => setShowPostFlashGuide(false)} className="p-1 text-ink-light hover:text-ink">
+                  <X size={18} />
+                </button>
+              </div>
+              <p className="text-sm text-ink-light mb-4">固件已烧录成功，请按以下步骤完成配网：</p>
+              <ol className="space-y-3 text-sm text-ink">
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-ink text-white text-xs flex items-center justify-center font-medium">1</span>
+                  <span>断开 USB 数据线，给设备上电</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-ink text-white text-xs flex items-center justify-center font-medium">2</span>
+                  <span>在 WiFi 列表中找到 <code className="bg-paper-dark px-1.5 py-0.5 rounded text-xs font-mono">InkSight-XXXX</code> 热点并连接</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-ink text-white text-xs flex items-center justify-center font-medium">3</span>
+                  <span>浏览器自动弹出配网页面，若未弹出则手动访问 <code className="bg-paper-dark px-1.5 py-0.5 rounded text-xs font-mono">192.168.4.1</code></span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-ink text-white text-xs flex items-center justify-center font-medium">4</span>
+                  <span>输入家庭 WiFi 和服务器地址，保存后设备自动重启联网</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-ink text-white text-xs flex items-center justify-center font-medium">5</span>
+                  <span>保存成功后，配网页面底部会显示<strong>「打开配置页面」</strong>链接，点击即可进行个性化配置</span>
+                </li>
+              </ol>
+              <div className="mt-4">
+                <Button size="sm" onClick={() => window.open("/config", "_blank")}>
+                  前往配置页面
+                </Button>
+                <p className="mt-2 text-xs text-ink-light">配置页面会自动检测设备上线</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -24,6 +24,16 @@ AVAILABLE_ICONS = (
     "rainy, rice, snow, star, sunny, thunderstorm, tips, vegetable, vital, yes, zen"
 )
 
+IMAGE_INTENT_PATTERNS = (
+    r"文生图", r"图生图", r"生成.*图", r"生成.*画", r"生成一张", r"来一张",
+    r"图片", r"图像", r"配图", r"画面", r"图画", r"画作", r"绘画", r"作画",
+    r"画一张", r"画个", r"画幅", r"插画", r"海报", r"壁纸", r"水墨画", r"简笔画",
+    r"素描", r"速写", r"漫画", r"手绘", r"风景画", r"肖像画",
+    r"text2image", r"image generation", r"generate.*image", r"create.*image",
+    r"image", r"illustration", r"poster", r"wallpaper", r"artwork", r"render",
+    r"photo", r"painting", r"drawing", r"sketch",
+)
+
 # Compact examples embedded directly
 _ZEN_EXAMPLE = """{
   "mode_id": "ZEN", "display_name": "禅意", "icon": "zen", "cacheable": true,
@@ -238,6 +248,46 @@ def _auto_fix(definition: dict) -> dict:
     return definition
 
 
+def _is_image_generation_request(description: str) -> bool:
+    text = (description or "").lower()
+    for pattern in IMAGE_INTENT_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
+
+
+def _force_image_gen_mode(definition: dict) -> dict:
+    mode_id = (definition.get("mode_id") or "MY_IMAGE").upper()
+    display_name = definition.get("display_name") or "自定义图像"
+    icon = definition.get("icon") or "art"
+
+    fixed = dict(definition)
+    fixed["mode_id"] = mode_id
+    fixed["display_name"] = display_name
+    fixed["icon"] = icon
+    fixed["cacheable"] = False
+    fixed["description"] = fixed.get("description") or "AI 图像生成模式"
+    fixed["content"] = {
+        "type": "image_gen",
+        "provider": "text2image",
+        "fallback": {
+            "artwork_title": display_name,
+            "image_url": "",
+            "description": "图像生成中",
+        },
+    }
+    fixed["layout"] = {
+        "status_bar": {"line_width": 1},
+        "body": [
+            {"type": "text", "field": "artwork_title", "font_size": 14, "align": "center", "max_lines": 1},
+            {"type": "image", "field": "image_url", "width": 220, "height": 150},
+            {"type": "text", "field": "description", "font_size": 11, "align": "center", "max_lines": 2},
+        ],
+        "footer": {"label": mode_id, "attribution_template": "— AI Image"},
+    }
+    return fixed
+
+
 async def generate_mode_definition(
     description: str,
     image_base64: str | None = None,
@@ -250,6 +300,7 @@ async def generate_mode_definition(
     warning (optional).
     """
     warning = None
+    prefer_image_gen = _is_image_generation_request(description)
 
     # Check vision support
     if image_base64 and not _supports_vision(provider, model):
@@ -283,6 +334,9 @@ async def generate_mode_definition(
 
     # Auto-fix common issues
     definition = _auto_fix(definition)
+
+    if prefer_image_gen:
+        definition = _force_image_gen_mode(definition)
 
     # Validate
     if not _validate_mode_def(definition):

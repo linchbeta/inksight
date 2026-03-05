@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,8 @@ from ..config import (
 )
 
 FONTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fonts")
+TRUETYPE_DIR = os.path.join(FONTS_DIR, "truetype")
+BITMAP_DIR = os.path.join(FONTS_DIR, "bitmap")
 ICONS_DIR = os.path.join(FONTS_DIR, "icons")
 
 SCREEN_W = SCREEN_WIDTH
@@ -29,14 +32,85 @@ EINK_BG = EINK_BACKGROUND
 EINK_FG = EINK_FOREGROUND
 
 _font_warned: set[str] = set()
+_bitmap_warned: set[str] = set()
+_font_engine = os.getenv("INKSIGHT_FONT_ENGINE", "bitmap").strip().lower()
+_force_bitmap = _font_engine in {"bitmap", "pixel", "pil"}
+_fontmode = os.getenv("INKSIGHT_TEXT_FONTMODE", "1").strip()
+_bitmap_suffix_to_load_size = {9: 12, 10: 13, 11: 15, 12: 16, 13: 14}
+_bitmap_max_request_size = int(os.getenv("INKSIGHT_BITMAP_MAX_REQUEST_SIZE", "16"))
 
 
-def load_font(font_key: str, size: int) -> ImageFont.FreeTypeFont:
+def apply_text_fontmode(draw: ImageDraw.ImageDraw) -> None:
+    draw.fontmode = "1" if _fontmode != "L" else "L"
+
+
+def _ordered_bitmap_suffixes(size: int) -> list[int]:
+    return sorted(
+        _bitmap_suffix_to_load_size.keys(),
+        key=lambda s: abs(_bitmap_suffix_to_load_size[s] - size),
+    )
+
+
+def _bitmap_load_size_from_path(path: str, requested_size: int) -> int:
+    m = re.search(r"-(\d+)\.(pcf|otb)$", path.lower())
+    if m:
+        suffix = int(m.group(1))
+        mapped = _bitmap_suffix_to_load_size.get(suffix)
+        if mapped is not None:
+            return mapped
+    return requested_size
+
+
+def _bitmap_candidates(font_name: str, size: int) -> list[str]:
+    name = os.path.basename(font_name)
+    stem, ext = os.path.splitext(name)
+    ext = ext.lower()
+    if ext in {".pil", ".pcf", ".otb"}:
+        return [name]
+    suffixes = _ordered_bitmap_suffixes(size)
+    sized_pcf = [f"{stem}-{s}.pcf" for s in suffixes]
+    sized_otb = [f"{stem}-{s}.otb" for s in suffixes]
+    sized_pil = [f"{stem}-{s}.pil" for s in suffixes]
+    return [
+        *sized_pcf,
+        f"{stem}.pcf",
+        *sized_otb,
+        f"{stem}.otb",
+        *sized_pil,
+        f"{stem}.pil",
+    ]
+
+
+def _load_bitmap_font(font_name: str, size: int) -> ImageFont.ImageFont | None:
+    if size > _bitmap_max_request_size:
+        return None
+    for rel in _bitmap_candidates(font_name, size):
+        path = os.path.join(BITMAP_DIR, rel)
+        if not os.path.exists(path):
+            continue
+        try:
+            lower = path.lower()
+            if lower.endswith(".pil"):
+                return ImageFont.load(path)
+            load_size = _bitmap_load_size_from_path(path, size)
+            return ImageFont.truetype(path, load_size)
+        except Exception:
+            if rel not in _bitmap_warned:
+                _bitmap_warned.add(rel)
+                logger.warning(f"[FONT] Failed to load bitmap font: {path}")
+    return None
+
+
+def load_font(font_key: str, size: int) -> ImageFont.ImageFont:
     """从配置加载字体"""
     font_name = FONTS.get(font_key)
     if not font_name:
         return ImageFont.load_default()
-    path = os.path.join(FONTS_DIR, font_name)
+    if _force_bitmap:
+        bitmap_font = _load_bitmap_font(font_name, size)
+        if bitmap_font is not None:
+            return bitmap_font
+    path = os.path.join(TRUETYPE_DIR, font_name)
     if os.path.exists(path):
         return ImageFont.truetype(path, size)
     if font_key not in _font_warned:
@@ -45,10 +119,16 @@ def load_font(font_key: str, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-def load_font_by_name(name: str, size: int) -> ImageFont.FreeTypeFont:
+def load_font_by_name(name: str, size: int) -> ImageFont.ImageFont:
     """直接通过文件名加载字体（兼容旧代码）"""
-    path = os.path.join(FONTS_DIR, name)
+    if _force_bitmap:
+        bitmap_font = _load_bitmap_font(name, size)
+        if bitmap_font is not None:
+            return bitmap_font
+    path = os.path.join(TRUETYPE_DIR, name)
     if os.path.exists(path):
+        if name.lower().endswith(".pil"):
+            return ImageFont.load(path)
         return ImageFont.truetype(path, size)
     if name not in _font_warned:
         _font_warned.add(name)
@@ -254,7 +334,7 @@ def draw_footer(
         )
 
 
-def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+def wrap_text(text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
     """文本换行"""
     lines = []
     for paragraph in text.split("\n"):

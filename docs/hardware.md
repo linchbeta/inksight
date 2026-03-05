@@ -114,5 +114,5 @@ USB-C ──> TP5000 ──>│ 3V3         GPIO4 ├──> CLK (E-Ink)
 
 1. **BUSY 未接或接触不良** — 确认 ESP32 **GPIO10** 与屏幕模组 **BUSY** 引脚可靠连接（杜邦线插紧、无断线）。若为排线/转接，确认对应脚位与模组丝印一致。
 2. **接错线** — 确认没有把 BUSY 接到 GND 或 3.3V（接 3.3V 会一直为高，必现 Busy Timeout）。对照模组说明书或丝印确认 BUSY 脚位（有的标为 BUSY / RDY）。
-3. **换用其他 GPIO 做 BUSY（可选）** — 若怀疑 GPIO10 在本板上有特殊用法，可把 BUSY 改接到空闲 GPIO（如 **GPIO5**）。在 `firmware/src/config.h` 中修改 `#define PIN_EPD_BUSY 10` 为 `#define PIN_EPD_BUSY 5`，硬件上把屏幕 BUSY 接到 ESP32 的 GPIO5，重新编译烧录。
+3. **换用其他 GPIO 做 BUSY（可选）** — 若怀疑 GPIO10 在本板上有特殊用法，可把 BUSY 改接到空闲 GPIO（如 **GPIO3**）。在 `firmware/src/config.h` 中修改 `#define PIN_EPD_BUSY 10` 为 `#define PIN_EPD_BUSY 3`，硬件上把屏幕 BUSY 接到 ESP32 的 GPIO3，重新编译烧录。
 4. **屏能亮但仍有 Timeout** — 说明刷新流程仍在执行，只是等待 BUSY 超时后继续了。仍建议按上面 1、2 检查 BUSY 接线，否则后续刷新可能不稳定。

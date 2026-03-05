@@ -12,11 +12,32 @@ from .config import (
     SCREEN_HEIGHT,
     DEFAULT_LLM_PROVIDER,
     DEFAULT_LLM_MODEL,
+    DEFAULT_IMAGE_PROVIDER,
+    DEFAULT_IMAGE_MODEL,
     DEFAULT_LANGUAGE,
     DEFAULT_CONTENT_TONE,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def get_effective_mode_config(cfg: dict | None, persona: str) -> dict:
+    base = dict(cfg or {})
+    mode_overrides = base.get("mode_overrides", {})
+    if not isinstance(mode_overrides, dict):
+        return base
+    override = mode_overrides.get((persona or "").upper(), {})
+    if not isinstance(override, dict):
+        return base
+    for key in ("city", "llm_provider", "llm_model"):
+        value = override.get(key)
+        if isinstance(value, str) and value.strip():
+            base[key] = value.strip()
+    reserved = {"city", "llm_provider", "llm_model", "llmProvider", "llmModel"}
+    mode_settings = {k: v for k, v in override.items() if k not in reserved}
+    if mode_settings:
+        base["mode_settings"] = mode_settings
+    return base
 
 
 async def generate_and_render(
@@ -41,7 +62,7 @@ async def generate_and_render(
     time_str = date_ctx.get("time_str", "")
     weather_str = weather["weather_str"]
     weather_code = weather.get("weather_code", -1)
-    cfg = config or {}
+    cfg = get_effective_mode_config(config, persona)
 
     content = await _generate_content_for_persona(
         persona, cfg, date_ctx, weather_str, mac=mac,
@@ -74,10 +95,15 @@ async def _generate_content_for_persona(
 
     # Decrypt device API key if available
     device_api_key = ""
+    device_image_api_key = ""
     encrypted_key = cfg.get("llm_api_key", "")
     if encrypted_key:
         from .crypto import decrypt_api_key
         device_api_key = decrypt_api_key(encrypted_key)
+    encrypted_image_key = cfg.get("image_api_key", "")
+    if encrypted_image_key:
+        from .crypto import decrypt_api_key
+        device_image_api_key = decrypt_api_key(encrypted_image_key)
 
     ctx = ContentContext(
         config=cfg,
@@ -114,10 +140,13 @@ async def _generate_content_for_persona(
             content_tone=cfg.get("content_tone", DEFAULT_CONTENT_TONE),
             llm_provider=cfg.get("llm_provider", DEFAULT_LLM_PROVIDER),
             llm_model=cfg.get("llm_model", DEFAULT_LLM_MODEL),
+            image_provider=cfg.get("image_provider", DEFAULT_IMAGE_PROVIDER),
+            image_model=cfg.get("image_model", DEFAULT_IMAGE_MODEL),
             mac=mac,
             screen_w=screen_w,
             screen_h=screen_h,
             api_key=device_api_key,
+            image_api_key=device_image_api_key,
         )
 
     # Builtin Python mode - use specialized content functions

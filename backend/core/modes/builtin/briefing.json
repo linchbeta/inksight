@@ -67,7 +67,8 @@
           }
         ]
       },
-      { "type": "separator", "style": "short", "width": 90 },
+      { "type": "spacer", "height": 4 },
+      { "type": "separator", "style": "dashed", "margin_x": 24 },
       {
         "type": "section",
         "title": "PH #1",
@@ -120,7 +121,8 @@
           "item_spacing": 14,
           "margin_x": 8
         },
-        { "type": "separator", "style": "short", "width": 60 },
+        { "type": "spacer", "height": 2 },
+        { "type": "separator", "style": "dashed", "margin_x": 8 },
         { "type": "text", "field": "insight", "font_size": 10, "align": "left", "margin_x": 8, "max_lines": 2 }
       ],
       "footer": { "label": "BRIEFING", "height": 18 }
@@ -145,7 +147,8 @@
             }
           ]
         },
-        { "type": "separator", "style": "short", "width": 120 },
+        { "type": "spacer", "height": 6 },
+        { "type": "separator", "style": "dashed", "margin_x": 40 },
         {
           "type": "section",
           "title": "PH #1",

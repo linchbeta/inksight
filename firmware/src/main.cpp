@@ -32,8 +32,9 @@ struct DeviceContext {
 
     // Button state
     unsigned long btnPressStart = 0;
-    unsigned long lastClickTime = 0;
-    int clickCount = 0;
+    bool liveMode = false;
+    unsigned long lastLivePollAt = 0;
+    unsigned long lastLiveWiFiRetryAt = 0;
 
     // Timing
     unsigned long setupDoneAt = 0;
@@ -41,8 +42,7 @@ struct DeviceContext {
 
     // Pending actions (set by button handler, consumed by loop)
     bool wantRefresh = false;
-    bool wantNextMode = false;
-    bool wantFavorite = false;
+    bool wantEnterLiveMode = false;
 };
 
 static DeviceContext ctx;
@@ -58,8 +58,9 @@ static uint32_t computeChecksum(const uint8_t *buf, int len) {
 
 // ── Forward declarations ────────────────────────────────────
 static void checkConfigButton();
-static void triggerImmediateRefresh(bool nextMode = false);
-static void triggerFavorite();
+static void triggerImmediateRefresh(bool nextMode = false, bool keepWiFi = false);
+static void handleLiveMode();
+static bool waitForContentReady();
 static void handleFailure(const char *reason);
 static void enterDeepSleep(int minutes);
 
@@ -119,8 +120,12 @@ void setup() {
 
     loadConfig();
 
-    // Check if config button is held or no WiFi config exists
-    bool forcePortal = (digitalRead(PIN_CFG_BTN) == LOW);
+    // Only force portal if BOOT is held for a moment (avoids RST bounce triggering portal)
+    bool forcePortal = false;
+    if (digitalRead(PIN_CFG_BTN) == LOW) {
+        delay(400);
+        forcePortal = (digitalRead(PIN_CFG_BTN) == LOW);
+    }
     bool hasConfig   = (cfgSSID.length() > 0);
 
     if (forcePortal || !hasConfig) {
@@ -164,10 +169,14 @@ void setup() {
 
     Serial.println("Fetching image...");
     ledFeedback("downloading");
-    if (!fetchBMP()) {
-        ledFeedback("fail");
-        handleFailure("Server error");
-        return;
+    bool gotFallback = false;
+    bool ok = fetchBMP(false, &gotFallback);
+    if (!ok || gotFallback) {
+        if (!waitForContentReady()) {
+            ledFeedback("fail");
+            handleFailure("Server error");
+            return;
+        }
     }
 
     // Success - reset retry counter
@@ -184,8 +193,19 @@ void setup() {
     updateTimeDisplay();
     ctx.lastClockTick = millis();
 
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    bool firstInstallLivePending = isFirstInstallLiveModePending();
+    if (firstInstallLivePending) {
+        ctx.liveMode = true;
+        ctx.lastLivePollAt = 0;
+        ctx.lastLiveWiFiRetryAt = 0;
+        markFirstInstallLiveModeDone();
+        postRuntimeMode("active");
+        Serial.println("[LIVE] First install: default to active mode");
+    } else {
+        postRuntimeMode("interval");
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    }
 
     ctx.state = DeviceState::DISPLAYING;
     ctx.setupDoneAt = millis();
@@ -212,19 +232,33 @@ void loop() {
 
     checkConfigButton();
 
-    // Handle button-triggered actions
-    if (ctx.wantFavorite) {
-        triggerFavorite();
-        ctx.wantFavorite = false;
-        ctx.wantNextMode = false;
+    if (ctx.wantEnterLiveMode) {
+        ctx.wantEnterLiveMode = false;
+        if (ctx.liveMode) {
+            ctx.liveMode = false;
+            Serial.println("[LIVE] Live mode disabled, back to interval mode");
+            ledFeedback("ack");
+            postRuntimeMode("interval");
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+        } else {
+            ctx.liveMode = true;
+            ctx.lastLivePollAt = 0;
+            ctx.lastLiveWiFiRetryAt = 0;
+            Serial.println("[LIVE] Live mode enabled");
+            ledFeedback("ack");
+            if (connectWiFi()) {
+                Serial.println("[LIVE] WiFi connected");
+                postRuntimeMode("active");
+            }
+        }
+    } else if (ctx.wantRefresh) {
+        triggerImmediateRefresh();
         ctx.wantRefresh = false;
-        ctx.setupDoneAt = millis();
-    } else if (ctx.wantRefresh || ctx.wantNextMode) {
-        triggerImmediateRefresh(ctx.wantNextMode);
-        ctx.wantRefresh = false;
-        ctx.wantNextMode = false;
         ctx.setupDoneAt = millis();
     }
+
+    handleLiveMode();
 
     unsigned long now = millis();
     bool timeChanged = false;
@@ -237,20 +271,22 @@ void loop() {
         updateTimeDisplay();
     }
 
-    unsigned long refreshInterval = 0;
+    if (!ctx.liveMode) {
+        unsigned long refreshInterval = 0;
 #if DEBUG_MODE
-    refreshInterval = (unsigned long)DEBUG_REFRESH_MIN * 60000UL;
+        refreshInterval = (unsigned long)DEBUG_REFRESH_MIN * 60000UL;
 #else
-    refreshInterval = (unsigned long)cfgSleepMin * 60000UL;
+        refreshInterval = (unsigned long)cfgSleepMin * 60000UL;
 #endif
-    if (millis() - ctx.setupDoneAt >= refreshInterval) {
+        if (millis() - ctx.setupDoneAt >= refreshInterval) {
 #if DEBUG_MODE
-        Serial.printf("[DEBUG] %d min elapsed, refreshing content...\n", DEBUG_REFRESH_MIN);
+            Serial.printf("[DEBUG] %d min elapsed, refreshing content...\n", DEBUG_REFRESH_MIN);
 #else
-        Serial.printf("%d min elapsed, refreshing content...\n", cfgSleepMin);
+            Serial.printf("%d min elapsed, refreshing content...\n", cfgSleepMin);
 #endif
-        triggerImmediateRefresh();
-        ctx.setupDoneAt = millis();
+            triggerImmediateRefresh();
+            ctx.setupDoneAt = millis();
+        }
     }
 
     delay(50);
@@ -268,12 +304,31 @@ static void enterDeepSleep(int minutes) {
 
 // ── Failure handler with retry logic ────────────────────────
 
+static void showFailureDiagnostic(const char *reason) {
+    char l2[64], l3[64];
+    snprintf(l2, sizeof(l2), "SSID: %.40s", cfgSSID.c_str());
+    snprintf(l3, sizeof(l3), "URL: %.44s", cfgServer.c_str());
+    showDiagnostic(reason, l2, l3, "Hold BOOT to reconfigure");
+}
+
 static void handleFailure(const char *reason) {
-    // Try offline cache first
+    // Show diagnostic screen so user can see what's wrong
+    Serial.printf("[DIAG] %s | SSID=%s | Server=%s\n",
+                  reason, cfgSSID.c_str(), cfgServer.c_str());
+    showFailureDiagnostic(reason);
+
+    // Wait 5 seconds so user can read the diagnostic
+    delay(5000);
+
+    // Try offline cache
     if (cacheLoad(imgBuf, IMG_BUF_LEN)) {
         Serial.println("Showing cached content (offline mode)");
-        // Draw "OFFLINE" marker in top-left corner
-        drawText("OFFLINE", TIME_RGN_X0, TIME_RGN_Y0, 1);
+        const int offlineScale = 2;
+        const int offlineLen = 7;
+        const int offlineWidth = offlineLen * (5 * offlineScale + offlineScale) - offlineScale;
+        const int offlineX = W - offlineWidth - 4;
+        const int offlineY = (H * 12 / 100) + 2;
+        drawText("OFFLINE", offlineX, offlineY, offlineScale);
         smartDisplay(imgBuf);
         ledFeedback("success");
 
@@ -288,28 +343,18 @@ static void handleFailure(const char *reason) {
         return;
     }
 
-    // No cache — original retry logic
+    // No cache — retry logic
     int retryCount = getRetryCount();
 
     if (retryCount < MAX_RETRY_COUNT) {
         int delaySec = RETRY_DELAYS[retryCount];
         setRetryCount(retryCount + 1);
 
-        // Show error with retry info on display
-        char msg[64];
-        snprintf(msg, sizeof(msg), "%s %d/%d %ds",
-                 reason, retryCount + 1, MAX_RETRY_COUNT, delaySec);
-        showError(msg);
-        epdSleep();
-
         Serial.printf("%s, retry %d/%d in %ds...\n",
                       reason, retryCount + 1, MAX_RETRY_COUNT, delaySec);
         delay((unsigned long)delaySec * 1000);
         ESP.restart();
     } else {
-        showError("Sleep. Press btn.");
-        epdSleep();
-
         Serial.println("Max retries reached, entering deep sleep");
         resetRetryCount();
         esp_sleep_enable_timer_wakeup((uint64_t)cfgSleepMin * 60ULL * 1000000ULL);
@@ -319,14 +364,73 @@ static void handleFailure(const char *reason) {
 
 // ── Immediate refresh (reused by button press and timer) ────
 
-static void triggerImmediateRefresh(bool nextMode) {
+static void handleLiveMode() {
+    if (!ctx.liveMode) return;
+
+    unsigned long now = millis();
+#if DEBUG_MODE
+    unsigned long refreshInterval = (unsigned long)DEBUG_REFRESH_MIN * 60000UL;
+#else
+    unsigned long refreshInterval = (unsigned long)cfgSleepMin * 60000UL;
+#endif
+    if (WiFi.status() != WL_CONNECTED) {
+        if (now - ctx.lastLiveWiFiRetryAt >= (unsigned long)LIVE_WIFI_RETRY_MS) {
+            ctx.lastLiveWiFiRetryAt = now;
+            ledFeedback("connecting");
+            if (connectWiFi()) {
+                Serial.println("[LIVE] WiFi connected");
+            } else {
+                Serial.println("[LIVE] WiFi reconnect failed");
+            }
+        }
+        return;
+    }
+
+    if (ctx.lastLivePollAt != 0 &&
+        now - ctx.lastLivePollAt < (unsigned long)LIVE_POLL_MS) {
+        return;
+    }
+    ctx.lastLivePollAt = now;
+
+    bool shouldExitLive = false;
+    if (hasPendingRemoteAction(&shouldExitLive)) {
+        Serial.println("[LIVE] Pending action detected, refreshing now");
+        triggerImmediateRefresh(false, true);
+        ctx.setupDoneAt = millis();
+        return;
+    }
+    if (shouldExitLive) {
+        ctx.liveMode = false;
+        postRuntimeMode("interval");
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        Serial.println("[LIVE] Backend requested interval mode");
+        return;
+    }
+
+    if (millis() - ctx.setupDoneAt >= refreshInterval) {
+#if DEBUG_MODE
+        Serial.printf("[LIVE][DEBUG] Fallback %d min elapsed, refreshing content...\n", DEBUG_REFRESH_MIN);
+#else
+        Serial.printf("[LIVE] Fallback %d min elapsed, refreshing content...\n", cfgSleepMin);
+#endif
+        triggerImmediateRefresh(false, true);
+        ctx.setupDoneAt = millis();
+    }
+}
+
+static void triggerImmediateRefresh(bool nextMode, bool keepWiFi) {
     Serial.println("[REFRESH] Triggering immediate refresh...");
     ledFeedback("ack");
     if (nextMode) {
         showModePreview("NEXT");
     }
-    ledFeedback("connecting");
-    if (connectWiFi()) {
+    bool connected = (WiFi.status() == WL_CONNECTED);
+    if (!connected) {
+        ledFeedback("connecting");
+        connected = connectWiFi();
+    }
+    if (connected) {
         ledFeedback("downloading");
         if (fetchBMP(nextMode)) {
             cacheSave(imgBuf, IMG_BUF_LEN);
@@ -350,39 +454,40 @@ static void triggerImmediateRefresh(bool nextMode) {
             ledFeedback("fail");
             Serial.println("Fetch failed, keeping old content");
         }
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
+        if (!keepWiFi) {
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+        }
     } else {
         ledFeedback("fail");
         Serial.println("WiFi reconnect failed");
     }
 }
 
-// ── Favorite handler (triple-click) ─────────────────────────
-
-static void triggerFavorite() {
-    Serial.println("[FAVORITE] Posting favorite...");
-    ledFeedback("ack");
-    if (connectWiFi()) {
-        if (postFavorite()) {
-            ledFeedback("favorite");
-            Serial.println("Favorite posted successfully");
-        } else {
-            ledFeedback("fail");
-            Serial.println("Favorite post failed");
+static bool waitForContentReady() {
+    const int maxRetries = 4;
+    const int waitMs = 15000;
+    for (int i = 0; i < maxRetries; i++) {
+        Serial.printf("[BOOT] Content not ready, retry %d/%d\n", i + 1, maxRetries);
+        showError("Generating...");
+        delay(waitMs);
+        if (WiFi.status() != WL_CONNECTED) {
+            if (!connectWiFi()) {
+                continue;
+            }
         }
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
-    } else {
-        ledFeedback("fail");
-        Serial.println("WiFi reconnect failed for favorite");
+        ledFeedback("downloading");
+        bool gotFallback = false;
+        if (fetchBMP(false, &gotFallback) && !gotFallback) {
+            Serial.println("[BOOT] Content is ready");
+            return true;
+        }
     }
+    return false;
 }
 
 // ── Config button handler ───────────────────────────────────
-// Single click:       trigger immediate refresh
-// Double-click:       switch to next mode (adds &next=1 to URL)
-// Triple-click:       favorite/bookmark current content
+// Single click:       toggle live mode / interval mode
 // Long press (>=2s):  restart into config portal
 
 static void checkConfigButton() {
@@ -408,38 +513,8 @@ static void checkConfigButton() {
 
             if (pressDuration >= (unsigned long)SHORT_PRESS_MIN_MS &&
                 pressDuration < (unsigned long)CFG_BTN_HOLD_MS) {
-                unsigned long now = millis();
-                if (now - ctx.lastClickTime < (unsigned long)TRIPLE_CLICK_MS) {
-                    ctx.clickCount++;
-                    if (ctx.clickCount >= 3) {
-                        Serial.println("[BTN] Triple-click -> favorite");
-                        ctx.wantFavorite = true;
-                        ctx.clickCount = 0;
-                        ctx.lastClickTime = 0;
-                    } else if (ctx.clickCount == 2) {
-                        Serial.println("[BTN] Double-click -> next mode");
-                        ctx.wantNextMode = true;
-                        // Don't reset yet — wait to see if triple-click
-                        ctx.lastClickTime = now;
-                    }
-                } else {
-                    ctx.clickCount = 1;
-                    ctx.lastClickTime = now;
-                    Serial.printf("[BTN] Click #1 (%lums), waiting...\n", pressDuration);
-                }
-            }
-        } else {
-            if (ctx.lastClickTime != 0 &&
-                (millis() - ctx.lastClickTime >= (unsigned long)TRIPLE_CLICK_MS)) {
-                if (ctx.clickCount == 1) {
-                    Serial.println("[BTN] Single click -> immediate refresh");
-                    ctx.wantRefresh = true;
-                } else if (ctx.clickCount == 2 && !ctx.wantFavorite) {
-                    // Double-click confirmed (no third click came)
-                    // ctx.wantNextMode already set above
-                }
-                ctx.clickCount = 0;
-                ctx.lastClickTime = 0;
+                Serial.println("[BTN] Single click -> toggle live mode");
+                ctx.wantEnterLiveMode = true;
             }
         }
     }

@@ -51,6 +51,30 @@ body {
   background: rgba(26, 26, 26, 0.15);
 }
 
+.ink-dark-select::selection,
+.ink-dark-select *::selection {
+  background: #ffffff;
+  color: #1a1a1a;
+}
+
+.ink-dark-select::-moz-selection,
+.ink-dark-select *::-moz-selection {
+  background: #ffffff;
+  color: #1a1a1a;
+}
+
+.ink-strong-select::selection,
+.ink-strong-select *::selection {
+  background: #67e8f9 !important;
+  color: #111111 !important;
+}
+
+.ink-strong-select::-moz-selection,
+.ink-strong-select *::-moz-selection {
+  background: #67e8f9 !important;
+  color: #111111 !important;
+}
+
 /* ========================================
    Documentation Prose Styles
    ======================================== */
@@ -149,6 +173,29 @@ body {
 
 .docs-prose li strong {
   color: var(--color-ink);
+}
+
+.docs-prose table {
+  width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  color: var(--color-ink-muted);
+  font-size: 0.95rem;
+}
+
+.docs-prose th,
+.docs-prose td {
+  border: 1px solid rgba(26, 26, 26, 0.18);
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.6;
+}
+
+.docs-prose th {
+  background: var(--color-paper-dark);
+  color: var(--color-ink);
+  font-weight: 600;
 }
 
 .docs-prose code {

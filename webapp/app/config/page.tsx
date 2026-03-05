@@ -1,0 +1,2130 @@
+"use client";
+
+import { useEffect, useState, useCallback, Suspense, useMemo, useRef } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Settings,
+  Sliders,
+  Cpu,
+  Globe,
+  Sparkles,
+  Eye,
+  BarChart3,
+  RefreshCw,
+  Heart,
+  ChevronRight,
+  ChevronDown,
+  Save,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Plus,
+  Trash2,
+  Monitor,
+  LayoutGrid,
+  ArrowLeft,
+  X,
+} from "lucide-react";
+import { authHeaders } from "@/lib/auth";
+
+interface UserDevice {
+  mac: string;
+  nickname: string;
+  bound_at: string;
+  last_seen: string | null;
+}
+
+const MODE_META: Record<string, { name: string; tip: string }> = {
+  DAILY: { name: "每日", tip: "语录、书籍推荐、冷知识的综合日报" },
+  WEATHER: { name: "天气", tip: "实时天气和未来趋势看板" },
+  ZEN: { name: "禅意", tip: "一个大字表达当下心境" },
+  BRIEFING: { name: "简报", tip: "科技热榜 + AI 洞察简报" },
+  STOIC: { name: "斯多葛", tip: "每日一句哲学箴言" },
+  POETRY: { name: "诗词", tip: "古诗词与简短注解" },
+  ARTWALL: { name: "画廊", tip: "根据时令生成黑白艺术画" },
+  ALMANAC: { name: "老黄历", tip: "农历、节气、宜忌信息" },
+  RECIPE: { name: "食谱", tip: "按时段推荐三餐方案" },
+  COUNTDOWN: { name: "倒计时", tip: "重要日程倒计时/正计时" },
+  MEMO: { name: "便签", tip: "展示自定义便签文字" },
+  HABIT: { name: "打卡", tip: "每日习惯完成进度" },
+  ROAST: { name: "毒舌", tip: "轻松幽默的吐槽风格内容" },
+  FITNESS: { name: "健身", tip: "居家健身动作与建议" },
+  LETTER: { name: "慢信", tip: "来自不同时空的一封慢信" },
+  THISDAY: { name: "今日历史", tip: "历史上的今天重大事件" },
+  RIDDLE: { name: "猜谜", tip: "谜题与脑筋急转弯" },
+  QUESTION: { name: "每日一问", tip: "值得思考的开放式问题" },
+  BIAS: { name: "认知偏差", tip: "认知偏差与心理效应" },
+  STORY: { name: "微故事", tip: "可在 30 秒内读完的微故事" },
+  LIFEBAR: { name: "进度条", tip: "年/月/周/人生进度条" },
+  CHALLENGE: { name: "微挑战", tip: "每天一个 5 分钟微挑战" },
+};
+
+const CORE_MODES = ["DAILY", "WEATHER", "POETRY", "ARTWALL", "ALMANAC", "BRIEFING"];
+const EXTRA_MODES = Object.keys(MODE_META).filter((m) => !CORE_MODES.includes(m));
+
+const LLM_MODELS: Record<string, { v: string; n: string }[]> = {
+  deepseek: [{ v: "deepseek-chat", n: "DeepSeek Chat" }],
+  aliyun: [
+    { v: "qwen-max", n: "通义千问 Max" },
+    { v: "qwen-plus", n: "通义千问 Plus" },
+    { v: "qwen-turbo", n: "通义千问 Turbo" },
+    { v: "deepseek-v3", n: "DeepSeek V3" },
+  ],
+  moonshot: [
+    { v: "moonshot-v1-8k", n: "Kimi K1.5" },
+    { v: "moonshot-v1-32k", n: "Kimi K1.5 32K" },
+  ],
+};
+
+const IMAGE_MODELS: Record<string, { v: string; n: string }[]> = {
+  aliyun: [
+    { v: "qwen-image-max", n: "通义万相 qwen-image-max" },
+  ],
+};
+
+const STRATEGIES: Record<string, string> = {
+  random: "从已启用的模式中随机选取",
+  cycle: "按顺序循环切换已启用的模式",
+  time_slot: "根据时间段显示不同内容模式",
+  smart: "根据时间段自动匹配最佳模式",
+};
+
+const LANGUAGE_OPTIONS = [
+  { value: "zh", label: "中文为主" },
+  { value: "en", label: "英文为主" },
+  { value: "mixed", label: "中英混合" },
+] as const;
+
+const TONE_OPTIONS = [
+  { value: "positive", label: "积极鼓励" },
+  { value: "neutral", label: "中性克制" },
+  { value: "deep", label: "深沉内省" },
+  { value: "humor", label: "轻松幽默" },
+] as const;
+const PERSONA_PRESETS = ["鲁迅", "王小波", "JARVIS", "苏格拉底", "村上春树"] as const;
+
+function normalizeLanguage(v: unknown): string {
+  if (typeof v !== "string") return "zh";
+  if (v === "zh" || v === "en" || v === "mixed") return v;
+  const found = LANGUAGE_OPTIONS.find((x) => x.label === v);
+  return found?.value || "zh";
+}
+
+function normalizeTone(v: unknown): string {
+  if (typeof v !== "string") return "neutral";
+  if (v === "positive" || v === "neutral" || v === "deep" || v === "humor") return v;
+  const found = TONE_OPTIONS.find((x) => x.label === v);
+  return found?.value || "neutral";
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const MODE_TEMPLATES: Record<string, { label: string; def: any }> = {
+  quote: {
+    label: "语录模板",
+    def: {
+      mode_id: "MY_QUOTE", display_name: "自定义语录", icon: "book", cacheable: true,
+      description: "自定义语录模式",
+      content: {
+        type: "llm_json", prompt_template: "请生成一条有深度的语录，用 JSON 返回 {quote, author}。{context}",
+        output_schema: { quote: { type: "string" }, author: { type: "string" } }, temperature: 0.8,
+        fallback: { quote: "路漫漫其修远兮", author: "屈原" },
+        fallback_pool: [{ quote: "路漫漫其修远兮", author: "屈原" }, { quote: "知者不惑，仁者不忧", author: "孔子" }, { quote: "天行健，君子以自强不息", author: "易经" }],
+      },
+      layout: { status_bar: { line_width: 1 }, body: [{ type: "centered_text", field: "quote", font: "NotoSerifSC-Light.ttf", font_size: 18, vertical_center: true }], footer: { label: "MY_QUOTE", attribution_template: "— {author}" } },
+    },
+  },
+  list: {
+    label: "列表模板",
+    def: {
+      mode_id: "MY_LIST", display_name: "自定义列表", icon: "list", cacheable: true,
+      description: "列表展示模式",
+      content: {
+        type: "llm_json", prompt_template: "请生成3条科技快讯，JSON 格式 {title, items: [{text}]}。{context}",
+        output_schema: { title: { type: "string" }, items: { type: "array", items: { type: "object", properties: { text: { type: "string" } } } } },
+        temperature: 0.7, fallback: { title: "今日快讯", items: [{ text: "暂无内容" }] },
+      },
+      layout: { status_bar: { line_width: 1 }, body: [{ type: "text", field: "title", font_size: 16, align: "center", bold: true }, { type: "spacer", height: 8 }, { type: "list", field: "items", item_template: "{text}", max_items: 5, font_size: 12 }], footer: { label: "MY_LIST" } },
+    },
+  },
+  zen: {
+    label: "禅意模板",
+    def: {
+      mode_id: "MY_ZEN", display_name: "自定义禅", icon: "zen", cacheable: true,
+      description: "单字禅意模式",
+      content: {
+        type: "llm_json", prompt_template: "请给出一个蕴含哲理的汉字，并简短解读。JSON: {word, reading}。{context}",
+        output_schema: { word: { type: "string" }, reading: { type: "string" } }, temperature: 0.9,
+        fallback: { word: "道", reading: "万物之始" },
+      },
+      layout: { status_bar: { line_width: 1 }, body: [{ type: "centered_text", field: "word", font: "NotoSerifSC-Bold.ttf", font_size: 80, vertical_center: true }, { type: "centered_text", field: "reading", font_size: 13 }], footer: { label: "MY_ZEN" } },
+    },
+  },
+  sections: {
+    label: "综合模板",
+    def: {
+      mode_id: "MY_DAILY", display_name: "自定义综合", icon: "daily", cacheable: true,
+      description: "多栏综合内容",
+      content: {
+        type: "llm_json", prompt_template: "请生成今日内容：一句话语录、一个推荐、一个小贴士。JSON: {quote, recommend, tip}。{context}",
+        output_schema: { quote: { type: "string" }, recommend: { type: "string" }, tip: { type: "string" } }, temperature: 0.8,
+        fallback: { quote: "今天是美好的一天", recommend: "推荐阅读", tip: "记得喝水" },
+      },
+      layout: { status_bar: { line_width: 1 }, body: [{ type: "section", label: "📖 语录", blocks: [{ type: "text", field: "quote", font_size: 13 }] }, { type: "separator", dashed: true }, { type: "section", label: "💡 推荐", blocks: [{ type: "text", field: "recommend", font_size: 12 }] }, { type: "separator", dashed: true }, { type: "section", label: "🌟 小贴士", blocks: [{ type: "text", field: "tip", font_size: 12 }] }], footer: { label: "MY_DAILY" } },
+    },
+  },
+};
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+const TABS = [
+  { id: "modes", label: "模式", icon: Settings },
+  { id: "preferences", label: "个性化", icon: Sliders },
+  { id: "ai", label: "AI 模型", icon: Cpu },
+  { id: "stats", label: "状态", icon: BarChart3 },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+interface DeviceConfig {
+  mac?: string;
+  modes?: string[];
+  refreshStrategy?: string;
+  refreshInterval?: number;
+  refresh_strategy?: string;
+  refresh_minutes?: number;
+  city?: string;
+  language?: string;
+  contentTone?: string;
+  content_tone?: string;
+  characterTones?: string[];
+  character_tones?: string[];
+  llmProvider?: string;
+  llmModel?: string;
+  llm_provider?: string;
+  llm_model?: string;
+  imageProvider?: string;
+  imageModel?: string;
+  image_provider?: string;
+  image_model?: string;
+  countdownEvents?: { name: string; date: string }[];
+  countdown_events?: { name: string; date: string }[];
+  memoText?: string;
+  memo_text?: string;
+  has_api_key?: boolean;
+  has_image_api_key?: boolean;
+  mode_overrides?: Record<string, ModeOverride>;
+  modeOverrides?: Record<string, ModeOverride>;
+}
+
+interface ModeOverride {
+  city?: string;
+  llm_provider?: string;
+  llm_model?: string;
+  [key: string]: unknown;
+}
+
+interface ModeSettingSchemaItem {
+  key: string;
+  label: string;
+  type?: "text" | "textarea" | "number" | "select" | "boolean";
+  placeholder?: string;
+  default?: unknown;
+  min?: number;
+  max?: number;
+  step?: number;
+  description?: string;
+  as_json?: boolean;
+  options?: Array<{ value: string; label: string } | string>;
+}
+
+interface ServerModeItem {
+  mode_id: string;
+  display_name: string;
+  description: string;
+  source: string;
+  settings_schema?: ModeSettingSchemaItem[];
+}
+
+interface DeviceStats {
+  total_renders?: number;
+  cache_hit_rate?: number;
+  last_battery_voltage?: number;
+  last_rssi?: number;
+  last_refresh?: string;
+  error_count?: number;
+  mode_frequency?: Record<string, number>;
+}
+
+type RuntimeMode = "active" | "interval" | "unknown";
+
+function ConfigPageInner() {
+  const searchParams = useSearchParams();
+  const mac = searchParams.get("mac") || "";
+  const [discoveredDevice, setDiscoveredDevice] = useState<string | null>(null);
+
+  const [currentUser, setCurrentUser] = useState<{ user_id: number; username: string } | null | undefined>(undefined);
+  const [userDevices, setUserDevices] = useState<UserDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [bindMacInput, setBindMacInput] = useState("");
+  const [bindNicknameInput, setBindNicknameInput] = useState("");
+
+  useEffect(() => {
+    fetch("/api/auth/me", { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setCurrentUser(d ? { user_id: d.user_id, username: d.username } : null))
+      .catch(() => setCurrentUser(null));
+  }, []);
+
+  const loadUserDevices = useCallback(async () => {
+    setDevicesLoading(true);
+    try {
+      const res = await fetch("/api/user/devices", { headers: authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setUserDevices(data.devices || []);
+      }
+    } catch { /* ignore */ }
+    finally { setDevicesLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (currentUser && !mac) loadUserDevices();
+  }, [currentUser, mac, loadUserDevices]);
+
+  const handleBindDevice = async (deviceMac: string, nickname?: string) => {
+    try {
+      const res = await fetch("/api/user/devices", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ mac: deviceMac, nickname: nickname || "" }),
+      });
+      if (res.ok) {
+        await loadUserDevices();
+        setBindMacInput("");
+        setBindNicknameInput("");
+        return true;
+      }
+    } catch { /* ignore */ }
+    return false;
+  };
+
+  const handleUnbindDevice = async (deviceMac: string) => {
+    try {
+      const res = await fetch(`/api/user/devices/${encodeURIComponent(deviceMac)}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (res.ok) await loadUserDevices();
+    } catch { /* ignore */ }
+  };
+
+  const [activeTab, setActiveTab] = useState<TabId>("modes");
+  const [config, setConfig] = useState<DeviceConfig>({});
+  const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set(["STOIC", "ZEN", "DAILY"]));
+  const [strategy, setStrategy] = useState("random");
+  const [refreshMin, setRefreshMin] = useState(60);
+  const [city, setCity] = useState("");
+  const [language, setLanguage] = useState("zh");
+  const [contentTone, setContentTone] = useState("neutral");
+  const [characterTones, setCharacterTones] = useState<string[]>([]);
+  const [customPersonaTone, setCustomPersonaTone] = useState("");
+  const [llmProvider, setLlmProvider] = useState("deepseek");
+  const [llmModel, setLlmModel] = useState("deepseek-chat");
+  const [imageProvider, setImageProvider] = useState("aliyun");
+  const [imageModel, setImageModel] = useState("qwen-image-max");
+  const [modeOverrides, setModeOverrides] = useState<Record<string, ModeOverride>>({});
+  const [settingsMode, setSettingsMode] = useState<string | null>(null);
+  const [settingsJsonDrafts, setSettingsJsonDrafts] = useState<Record<string, string>>({});
+  const [settingsJsonErrors, setSettingsJsonErrors] = useState<Record<string, string>>({});
+  const [memoText, setMemoText] = useState("");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [imageApiKey, setImageApiKey] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; type: "success" | "error" | "info" } | null>(null);
+  const [stats, setStats] = useState<DeviceStats | null>(null);
+  const [previewImg, setPreviewImg] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewMode, setPreviewMode] = useState("");
+  const [previewNoCacheOnce, setPreviewNoCacheOnce] = useState(false);
+  const [previewCacheHit, setPreviewCacheHit] = useState<boolean | null>(null);
+  const [currentMode, setCurrentMode] = useState<string>("");
+  const [applyToScreenLoading, setApplyToScreenLoading] = useState(false);
+  const [favoritedModes, setFavoritedModes] = useState<Set<string>>(new Set());
+  const favoritesLoadedMacRef = useRef<string>("");
+  const memoSettingsInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("unknown");
+  const [isOnline, setIsOnline] = useState(false);
+  const [lastSeen, setLastSeen] = useState<string | null>(null);
+
+  const [customDesc, setCustomDesc] = useState("");
+  const [customModeName, setCustomModeName] = useState("");
+  const [customJson, setCustomJson] = useState("");
+  const [customGenerating, setCustomGenerating] = useState(false);
+  const [customPreviewImg, setCustomPreviewImg] = useState<string | null>(null);
+  const [customPreviewLoading, setCustomPreviewLoading] = useState(false);
+  const [customApplyToScreenLoading, setCustomApplyToScreenLoading] = useState(false);
+  const [editingCustomMode, setEditingCustomMode] = useState(false);
+  const [editorTab, setEditorTab] = useState<"ai" | "template">("ai");
+
+  const [serverModes, setServerModes] = useState<ServerModeItem[]>([]);
+
+  const showToast = useCallback((msg: string, type: "success" | "error" | "info" = "info") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/modes").then((r) => r.json()).then((d) => {
+      if (d.modes) setServerModes(d.modes);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (mac || discoveredDevice || !currentUser) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/discovery?minutes=5", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const macs: string[] = (data.devices || []).map((d: { mac: string }) => d.mac);
+        const owned = new Set(userDevices.map((d) => d.mac.toUpperCase()));
+        const candidate = macs.find((m) => m && !owned.has(m.toUpperCase()));
+        if (candidate && !cancelled) {
+          setDiscoveredDevice(candidate);
+          await handleBindDevice(candidate);
+        }
+      } catch { /* ignore */ }
+    };
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [mac, discoveredDevice, currentUser, userDevices]);
+
+  useEffect(() => {
+    if (!mac) return;
+    fetch(`/api/device/${encodeURIComponent(mac)}/state`)
+      .then((r) => r.ok ? r.json() : null)
+      .then(async (d) => {
+        if (!d?.last_persona) return;
+        setCurrentMode(d.last_persona);
+        setPreviewMode(d.last_persona);
+      })
+      .catch(() => {});
+  }, [mac]);
+
+  useEffect(() => {
+    if (!mac) return;
+    setLoading(true);
+    fetch(`/api/config/${encodeURIComponent(mac)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("No config");
+        return r.json();
+      })
+      .then((cfg: DeviceConfig) => {
+        setConfig(cfg);
+        if (cfg.modes?.length) setSelectedModes(new Set(cfg.modes.map((m) => m.toUpperCase())));
+        if (cfg.refreshStrategy || cfg.refresh_strategy) setStrategy((cfg.refreshStrategy || cfg.refresh_strategy) as string);
+        if (cfg.refreshInterval || cfg.refresh_minutes) setRefreshMin((cfg.refreshInterval || cfg.refresh_minutes) as number);
+        if (cfg.city) setCity(cfg.city);
+        if (cfg.language) setLanguage(normalizeLanguage(cfg.language));
+        if (cfg.contentTone || cfg.content_tone) setContentTone(normalizeTone(cfg.contentTone || cfg.content_tone));
+        if (cfg.characterTones || cfg.character_tones) setCharacterTones((cfg.characterTones || cfg.character_tones) as string[]);
+        if (cfg.llmProvider || cfg.llm_provider) setLlmProvider((cfg.llmProvider || cfg.llm_provider) as string);
+        if (cfg.llmModel || cfg.llm_model) setLlmModel((cfg.llmModel || cfg.llm_model) as string);
+        if (cfg.imageProvider || cfg.image_provider) setImageProvider((cfg.imageProvider || cfg.image_provider) as string);
+        if (cfg.imageModel || cfg.image_model) setImageModel((cfg.imageModel || cfg.image_model) as string);
+        if (cfg.mode_overrides) setModeOverrides(cfg.mode_overrides);
+        else if (cfg.modeOverrides) setModeOverrides(cfg.modeOverrides);
+        const loadedOverrides = ((cfg.mode_overrides || cfg.modeOverrides || {}) as Record<string, ModeOverride>);
+        const memoFromOverride = loadedOverrides?.MEMO?.memo_text;
+        if (typeof memoFromOverride === "string" && memoFromOverride.trim()) {
+          setMemoText(memoFromOverride);
+        } else if (cfg.memoText || cfg.memo_text) {
+          setMemoText((cfg.memoText || cfg.memo_text) as string);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [mac]);
+
+  const getModeOverride = useCallback((modeId: string) => {
+    return modeOverrides[modeId] || {};
+  }, [modeOverrides]);
+
+  const sanitizeModeOverride = useCallback((input: ModeOverride) => {
+    const cleaned: ModeOverride = {};
+    for (const [k, raw] of Object.entries(input)) {
+      if (k === "city" || k === "llm_provider" || k === "llm_model") {
+        if (typeof raw === "string" && raw.trim()) cleaned[k] = raw.trim();
+        continue;
+      }
+      if (typeof raw === "string") {
+        if (raw.trim()) cleaned[k] = raw.trim();
+        continue;
+      }
+      if (typeof raw === "number") {
+        if (!Number.isNaN(raw)) cleaned[k] = raw;
+        continue;
+      }
+      if (typeof raw === "boolean") {
+        cleaned[k] = raw;
+        continue;
+      }
+      if (Array.isArray(raw)) {
+        if (raw.length > 0) cleaned[k] = raw;
+        continue;
+      }
+      if (raw && typeof raw === "object") {
+        if (Object.keys(raw).length > 0) cleaned[k] = raw as Record<string, unknown>;
+      }
+    }
+    return cleaned;
+  }, []);
+
+  const updateModeOverride = useCallback((modeId: string, patch: Partial<ModeOverride>) => {
+    setModeOverrides((prev) => {
+      const next = { ...(prev[modeId] || {}), ...patch } as ModeOverride;
+      const cleaned = sanitizeModeOverride(next);
+      if (!Object.keys(cleaned).length) {
+        const copied = { ...prev };
+        delete copied[modeId];
+        return copied;
+      }
+      return { ...prev, [modeId]: cleaned };
+    });
+  }, [sanitizeModeOverride]);
+
+  const clearModeOverride = useCallback((modeId: string) => {
+    setModeOverrides((prev) => {
+      const copied = { ...prev };
+      delete copied[modeId];
+      return copied;
+    });
+    setSettingsJsonDrafts((prev) => {
+      const copied = { ...prev };
+      Object.keys(copied).forEach((k) => {
+        if (k.startsWith(`${modeId}:`)) delete copied[k];
+      });
+      return copied;
+    });
+    setSettingsJsonErrors((prev) => {
+      const copied = { ...prev };
+      Object.keys(copied).forEach((k) => {
+        if (k.startsWith(`${modeId}:`)) delete copied[k];
+      });
+      return copied;
+    });
+  }, []);
+
+  const modeSchemaMap = useMemo(
+    () => Object.fromEntries(serverModes.map((m) => [m.mode_id, m.settings_schema || []])),
+    [serverModes]
+  );
+
+  const applySettingsDrafts = useCallback((modeId: string) => {
+    const schema = modeSchemaMap[modeId] || [];
+    for (const item of schema) {
+      if (!item.as_json) continue;
+      const key = `${modeId}:${item.key}`;
+      if (!(key in settingsJsonDrafts)) continue;
+      const text = settingsJsonDrafts[key] || "";
+      if (!text.trim()) {
+        updateModeOverride(modeId, { [item.key]: undefined });
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(text);
+        updateModeOverride(modeId, { [item.key]: parsed });
+      } catch {
+        setSettingsJsonErrors((prev) => ({ ...prev, [key]: "JSON 格式错误" }));
+        showToast(`${item.label} JSON 格式错误`, "error");
+        return false;
+      }
+    }
+    return true;
+  }, [modeSchemaMap, settingsJsonDrafts, showToast, updateModeOverride]);
+
+  const handleCloseModeSettings = useCallback(() => {
+    if (!settingsMode) return;
+    if (!applySettingsDrafts(settingsMode)) return;
+    setSettingsMode(null);
+  }, [applySettingsDrafts, settingsMode]);
+
+  const handleSave = async () => {
+    if (!mac) { showToast("请先完成刷机和配网以获取设备 MAC", "error"); return; }
+    setSaving(true);
+    try {
+      const normalizedModeOverrides = Object.fromEntries(
+        Object.entries(modeOverrides)
+          .map(([modeId, ov]) => {
+            const cleaned = sanitizeModeOverride(ov);
+            return [modeId.toUpperCase(), cleaned] as const;
+          })
+          .filter(([, ov]) => Object.keys(ov).length > 0)
+      );
+      const body: Record<string, unknown> = {
+        mac,
+        modes: Array.from(selectedModes),
+        refreshStrategy: strategy,
+        refreshInterval: refreshMin,
+        city,
+        language,
+        contentTone,
+        characterTones: characterTones,
+        llmProvider: llmProvider,
+        llmModel: llmModel,
+        imageProvider: imageProvider,
+        imageModel: imageModel,
+        modeOverrides: normalizedModeOverrides,
+        memoText: memoText,
+      };
+      if (llmApiKey.trim()) body.llmApiKey = llmApiKey.trim();
+      if (imageApiKey.trim()) body.imageApiKey = imageApiKey.trim();
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      let onlineNow = isOnline;
+      try {
+        const stateRes = await fetch(`/api/device/${encodeURIComponent(mac)}/state`, { cache: "no-store" });
+        if (stateRes.ok) {
+          const stateData = await stateRes.json();
+          onlineNow = Boolean(stateData?.is_online);
+          setIsOnline(onlineNow);
+          setLastSeen(typeof stateData?.last_seen === "string" && stateData.last_seen ? stateData.last_seen : null);
+        }
+      } catch {}
+      showToast(
+        onlineNow ? "配置已保存" : "配置已保存，设备当前离线，将在设备上线后生效",
+        onlineNow ? "success" : "info",
+      );
+      setPreviewNoCacheOnce(true);
+    } catch {
+      showToast("保存失败", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePreview = async (mode?: string, forceNoCache = false, forcedModeOverride?: ModeOverride) => {
+    const m = mode || previewMode;
+    const consumeNoCacheOnce = previewNoCacheOnce;
+    const forceFresh = forceNoCache || consumeNoCacheOnce;
+    setPreviewCacheHit(null);
+    setPreviewLoading(true);
+    try {
+      const params = new URLSearchParams({ persona: m });
+      if (mac) params.set("mac", mac);
+      const activeModeOverride = sanitizeModeOverride({
+        ...(modeOverrides[m] || {}),
+        ...(forcedModeOverride || {}),
+      });
+      if (m === "MEMO" && memoText.trim() && !("memo_text" in activeModeOverride)) {
+        activeModeOverride.memo_text = memoText.trim();
+      }
+      const hasModeOverride = Object.keys(activeModeOverride).length > 0;
+      if (hasModeOverride) {
+        params.set("mode_override", JSON.stringify(activeModeOverride));
+      }
+      if (m === "MEMO") {
+        const memoCandidate = (
+          typeof forcedModeOverride?.memo_text === "string" && forcedModeOverride.memo_text.trim()
+            ? forcedModeOverride.memo_text
+            : typeof activeModeOverride.memo_text === "string" && activeModeOverride.memo_text.trim()
+            ? activeModeOverride.memo_text
+            : memoText
+        ).trim();
+        if (memoCandidate) {
+          params.set("memo_text", memoCandidate);
+        }
+      }
+      const modeCity = (modeOverrides[m]?.city || "").trim();
+      const globalCity = city.trim();
+      const previewCity = modeCity || globalCity;
+      const savedGlobalCity = (config.city || "").trim();
+      const savedOverrides = (config.mode_overrides || config.modeOverrides || {}) as Record<string, ModeOverride>;
+      const savedModeCity = (savedOverrides[m]?.city || "").trim();
+      const cityChanged = previewCity.length > 0 && (modeCity ? modeCity !== savedModeCity : globalCity !== savedGlobalCity);
+      if (cityChanged) params.set("city_override", previewCity);
+      if (forceFresh || cityChanged || hasModeOverride) params.set("no_cache", "1");
+      const res = await fetch(`/api/preview?${params}`);
+      if (!res.ok) throw new Error("Preview failed");
+      const blob = await res.blob();
+      setPreviewImg(URL.createObjectURL(blob));
+      const cacheHeader = res.headers.get("x-cache-hit");
+      setPreviewCacheHit(cacheHeader === "1" ? true : cacheHeader === "0" ? false : null);
+    } catch {
+      showToast("预览失败", "error");
+      setPreviewCacheHit(null);
+    } finally {
+      if (consumeNoCacheOnce) setPreviewNoCacheOnce(false);
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleRefreshDevice = async () => {
+    if (!mac) return;
+    try {
+      await fetch(`/api/device/${encodeURIComponent(mac)}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      showToast("已触发刷新", "success");
+    } catch { showToast("刷新失败", "error"); }
+  };
+
+  const handleFavorite = async () => {
+    if (!mac) return;
+    try {
+      await fetch(`/api/device/${encodeURIComponent(mac)}/favorite`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      showToast("已收藏", "success");
+    } catch { showToast("收藏失败", "error"); }
+  };
+
+  const loadStats = useCallback(async () => {
+    if (!mac) return;
+    try {
+      const res = await fetch(`/api/stats/${encodeURIComponent(mac)}`);
+      if (res.ok) setStats(await res.json());
+    } catch {}
+  }, [mac]);
+
+  const loadFavorites = useCallback(async (force = false) => {
+    if (!mac) return;
+    if (!force && favoritesLoadedMacRef.current === mac) return;
+    try {
+      const res = await fetch(`/api/device/${encodeURIComponent(mac)}/favorites?limit=100`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const modes = new Set<string>(
+        (data.favorites || [])
+          .map((item: { mode_id?: string }) => (item.mode_id || "").toUpperCase())
+          .filter((modeId: string) => modeId.length > 0),
+      );
+      setFavoritedModes(modes);
+      favoritesLoadedMacRef.current = mac;
+    } catch {}
+  }, [mac]);
+
+  const loadRuntimeMode = useCallback(async () => {
+    if (!mac) return;
+    try {
+      const res = await fetch(`/api/device/${encodeURIComponent(mac)}/state`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setIsOnline(Boolean(data?.is_online));
+      setLastSeen(typeof data?.last_seen === "string" && data.last_seen ? data.last_seen : null);
+      const mode = data?.runtime_mode;
+      if (mode === "active" || mode === "interval") {
+        setRuntimeMode(mode);
+      } else {
+        setRuntimeMode("interval");
+      }
+    } catch {
+      setIsOnline(false);
+      setLastSeen(null);
+      setRuntimeMode("interval");
+    }
+  }, [mac]);
+
+  useEffect(() => {
+    if (activeTab === "stats" && mac) loadStats();
+  }, [activeTab, mac, loadStats]);
+
+  useEffect(() => {
+    if (!mac) return;
+    favoritesLoadedMacRef.current = "";
+    loadFavorites();
+  }, [mac, loadFavorites]);
+
+  useEffect(() => {
+    if (!mac) return;
+    loadRuntimeMode();
+  }, [mac, loadRuntimeMode]);
+
+  const handleGenerateMode = async () => {
+    if (!customDesc.trim()) { showToast("请输入模式描述", "error"); return; }
+    setCustomGenerating(true);
+    try {
+      const res = await fetch("/api/modes/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: customDesc, provider: llmProvider, model: llmModel }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "生成失败");
+      setCustomJson(JSON.stringify(data.mode_def, null, 2));
+      setCustomModeName((data.mode_def?.display_name || "").toString());
+      showToast("模式生成成功", "success");
+    } catch (e) {
+      showToast(`生成失败: ${e instanceof Error ? e.message : "未知错误"}`, "error");
+    } finally {
+      setCustomGenerating(false);
+    }
+  };
+
+  const handleCustomPreview = async () => {
+    if (!customJson.trim()) return;
+    setCustomPreviewLoading(true);
+    try {
+      const def = JSON.parse(customJson);
+      if (customModeName.trim()) {
+        def.display_name = customModeName.trim();
+      }
+      const res = await fetch("/api/modes/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode_def: def }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "预览失败");
+      }
+      const blob = await res.blob();
+      setCustomPreviewImg(URL.createObjectURL(blob));
+    } catch (e) {
+      showToast(`预览失败: ${e instanceof Error ? e.message : ""}`, "error");
+    } finally {
+      setCustomPreviewLoading(false);
+    }
+  };
+
+  const handleApplyCustomPreviewToScreen = async () => {
+    if (!mac || !customPreviewImg) return;
+    setCustomApplyToScreenLoading(true);
+    try {
+      const stateRes = await fetch(`/api/device/${encodeURIComponent(mac)}/state`, { cache: "no-store" });
+      if (!stateRes.ok) {
+        showToast("无法确认设备状态，已阻止发送", "error");
+        return;
+      }
+      const stateData = await stateRes.json();
+      const mode = stateData?.runtime_mode;
+      if (mode === "active" || mode === "interval") {
+        setRuntimeMode(mode);
+      }
+      if (mode !== "active") {
+        showToast("设备处于间歇状态，不可发送", "error");
+        return;
+      }
+
+      const previewResponse = await fetch(customPreviewImg);
+      if (!previewResponse.ok) throw new Error("preview image unavailable");
+      const previewBlob = await previewResponse.blob();
+
+      let modeHint = "CUSTOM_PREVIEW";
+      try {
+        const def = JSON.parse(customJson);
+        if (customModeName.trim()) {
+          modeHint = customModeName.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+        } else if (typeof def?.mode_id === "string" && def.mode_id.trim()) {
+          modeHint = def.mode_id.trim().toUpperCase();
+        }
+      } catch {}
+
+      const qs = new URLSearchParams();
+      qs.set("mode", modeHint);
+      const res = await fetch(`/api/device/${encodeURIComponent(mac)}/apply-preview?${qs.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": "image/png" },
+        body: previewBlob,
+      });
+      if (!res.ok) throw new Error("apply-preview failed");
+      setCurrentMode(modeHint);
+      await loadRuntimeMode();
+      showToast("已下发到墨水屏", "success");
+    } catch {
+      showToast("下发失败", "error");
+    } finally {
+      setCustomApplyToScreenLoading(false);
+    }
+  };
+
+  const handleSaveCustomMode = async () => {
+    if (!customJson.trim()) return;
+    try {
+      const def = JSON.parse(customJson);
+      if (customModeName.trim()) {
+        def.display_name = customModeName.trim();
+      }
+      const res = await fetch("/api/modes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(def),
+      });
+      const data = await res.json();
+      if (data.ok || data.status === "ok") {
+        showToast(`模式 ${def.mode_id} 已保存`, "success");
+        fetch("/api/modes").then((r) => r.json()).then((d) => { if (d.modes) setServerModes(d.modes); }).catch(() => {});
+        setEditingCustomMode(false);
+        setCustomJson("");
+        setCustomDesc("");
+        setCustomModeName("");
+        setCustomPreviewImg(null);
+      } else {
+        throw new Error(data.error || "保存失败");
+      }
+    } catch (e) {
+      showToast(`保存失败: ${e instanceof Error ? e.message : ""}`, "error");
+    }
+  };
+
+  const toggleMode = (modeId: string) => {
+    setSelectedModes((prev) => {
+      const next = new Set(prev);
+      if (next.has(modeId)) next.delete(modeId);
+      else next.add(modeId);
+      return next;
+    });
+  };
+
+  const handleModePreview = (m: string) => {
+    setPreviewMode(m);
+    handlePreview(m);
+  };
+
+  const handleModeApply = async (m: string) => {
+    const wasSelected = selectedModes.has(m);
+    toggleMode(m);
+    showToast(wasSelected ? "已从轮播移除" : "已加入轮播", "success");
+  };
+
+  const handlePreviewFromSettings = (addToCarousel: boolean) => {
+    if (!settingsMode) return;
+    const modeId = settingsMode;
+    if (!applySettingsDrafts(modeId)) return;
+    let forcedOverride: ModeOverride | undefined;
+    if (modeId === "MEMO") {
+      const latestMemo = memoSettingsInputRef.current?.value ?? "";
+      if (latestMemo.trim()) {
+        forcedOverride = { memo_text: latestMemo };
+        updateModeOverride(modeId, { memo_text: latestMemo });
+        setMemoText(latestMemo);
+      }
+    }
+    if (addToCarousel && !selectedModes.has(modeId)) {
+      toggleMode(modeId);
+    }
+    setSettingsMode(null);
+    setPreviewMode(modeId);
+    setTimeout(() => {
+      handlePreview(modeId, true, forcedOverride);
+    }, 0);
+    showToast(addToCarousel ? "已加入轮播并刷新预览" : "已刷新预览", "success");
+  };
+
+  const handleApplyPreviewToScreen = async () => {
+    if (!mac || !previewMode || !previewImg) return;
+    setApplyToScreenLoading(true);
+    try {
+      const stateRes = await fetch(`/api/device/${encodeURIComponent(mac)}/state`, { cache: "no-store" });
+      if (!stateRes.ok) {
+        showToast("无法确认设备状态，已阻止发送", "error");
+        return;
+      }
+      const stateData = await stateRes.json();
+      const mode = stateData?.runtime_mode;
+      if (mode === "active" || mode === "interval") {
+        setRuntimeMode(mode);
+      }
+      if (mode !== "active") {
+        showToast("设备处于间歇状态，不可发送", "error");
+        return;
+      }
+
+      const previewResponse = await fetch(previewImg);
+      if (!previewResponse.ok) throw new Error("preview image unavailable");
+      const previewBlob = await previewResponse.blob();
+
+      const qs = new URLSearchParams();
+      qs.set("mode", previewMode);
+      const res = await fetch(`/api/device/${encodeURIComponent(mac)}/apply-preview?${qs.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": "image/png" },
+        body: previewBlob,
+      });
+      if (!res.ok) throw new Error("apply-preview failed");
+      setCurrentMode(previewMode);
+      await loadRuntimeMode();
+      showToast("已下发到墨水屏", "success");
+    } catch {
+      showToast("下发失败", "error");
+    } finally {
+      setApplyToScreenLoading(false);
+    }
+  };
+
+  const handleModeFavorite = async (m: string) => {
+    const wasFavorited = favoritedModes.has(m);
+    setFavoritedModes((prev) => {
+      const next = new Set(prev);
+      if (next.has(m)) next.delete(m); else next.add(m);
+      return next;
+    });
+    if (mac && !wasFavorited) {
+      try {
+        await fetch(`/api/device/${encodeURIComponent(mac)}/favorite`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: m }),
+        });
+        await loadFavorites(true);
+      } catch {}
+    }
+    showToast(wasFavorited ? "已取消收藏" : "已收藏", "success");
+  };
+
+  const handleAddCustomPersona = () => {
+    const v = customPersonaTone.trim();
+    if (!v) return;
+    setCharacterTones((prev) => (prev.includes(v) ? prev : [...prev, v]));
+    setCustomPersonaTone("");
+  };
+
+  const handleDeleteCustomMode = async (modeId: string) => {
+    const modeName = customModeMeta[modeId]?.name || modeId;
+    if (!window.confirm(`确定删除自定义模式「${modeName}」吗？`)) return;
+    try {
+      const res = await fetch(`/api/modes/custom/${encodeURIComponent(modeId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("delete failed");
+      setServerModes((prev) => prev.filter((m) => m.mode_id !== modeId));
+      setSelectedModes((prev) => {
+        const next = new Set(prev);
+        next.delete(modeId);
+        return next;
+      });
+      setFavoritedModes((prev) => {
+        const next = new Set(prev);
+        next.delete(modeId);
+        return next;
+      });
+      if (previewMode === modeId) {
+        setPreviewMode("");
+        setPreviewImg(null);
+        setPreviewCacheHit(null);
+      }
+      if (currentMode === modeId) {
+        setCurrentMode("");
+      }
+      if (settingsMode === modeId) {
+        setSettingsMode(null);
+      }
+      showToast(`已删除模式 ${modeName}`, "success");
+    } catch {
+      showToast("删除模式失败", "error");
+    }
+  };
+
+  const customModes = serverModes.filter((m) => m.source === "custom" && m.mode_id !== "VOCAB_DAILY");
+  const customModeMeta = Object.fromEntries(serverModes.map((m) => [m.mode_id, { name: m.display_name, tip: m.description }]));
+  const activeModeSchema = settingsMode ? (modeSchemaMap[settingsMode] || []) : [];
+
+  const batteryPct = stats?.last_battery_voltage
+    ? Math.min(100, Math.max(0, Math.round((stats.last_battery_voltage / 3.3) * 100)))
+    : null;
+  const statusLabel = !isOnline ? "离线" : runtimeMode === "active" ? "活跃状态" : "间歇状态";
+  const statusClass = !isOnline
+    ? "bg-paper-dark text-ink-light border border-ink/10"
+    : runtimeMode === "active"
+    ? "bg-green-50 text-green-700 border border-green-200"
+    : "bg-amber-50 text-amber-700 border border-amber-200";
+  const statusIconClass = !isOnline
+    ? "text-ink-light"
+    : runtimeMode === "active"
+    ? "text-green-600"
+    : "text-amber-600";
+
+  return (
+    <div className="mx-auto max-w-5xl px-6 py-10">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="font-serif text-3xl font-bold text-ink mb-2">设备配置</h1>
+        {currentUser === undefined ? (
+          <div className="flex items-center gap-2 text-ink-light text-sm py-4">
+            <Loader2 size={16} className="animate-spin" /> 加载中...
+          </div>
+        ) : currentUser === null ? (
+          <div className="flex items-start gap-2 p-3 rounded-sm border border-amber-200 bg-amber-50 text-sm text-amber-800">
+            <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-medium">请先登录</p>
+              <p className="text-xs mt-0.5">{mac ? "登录后才能配置设备。" : "登录后可以管理你的设备列表。"}</p>
+              <Link href={`/login?next=${encodeURIComponent(mac ? `/config?mac=${encodeURIComponent(mac)}` : "/config")}`}>
+                <Button size="sm" className="mt-2">登录 / 注册</Button>
+              </Link>
+            </div>
+          </div>
+        ) : mac ? (
+          <p className="text-ink-light text-sm flex items-center gap-2">
+            <CheckCircle2 size={14} className={statusIconClass} />
+            设备 MAC: <code className="bg-paper-dark px-2 py-0.5 rounded text-xs">{mac}</code>
+            <span className={`ml-1 inline-flex items-center rounded px-2 py-0.5 text-xs ${statusClass}`}>{statusLabel}</span>
+            {lastSeen && (
+              <span className="text-xs text-ink-light">
+                上次在线: {new Date(lastSeen).toLocaleString("zh-CN")}
+              </span>
+            )}
+            <Link href="/config" className="text-xs text-ink-light hover:text-ink underline ml-2">
+              返回设备列表
+            </Link>
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {/* Device list */}
+            {devicesLoading ? (
+              <div className="flex items-center gap-2 text-ink-light text-sm py-4">
+                <Loader2 size={16} className="animate-spin" /> 加载设备列表...
+              </div>
+            ) : userDevices.length > 0 ? (
+              <div className="space-y-2">
+                {userDevices.map((d) => (
+                  <div key={d.mac} className="flex items-center justify-between p-3 rounded-sm border border-ink/10 bg-paper hover:border-ink/30 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <Monitor size={18} className="text-ink-light" />
+                      <div>
+                        <p className="text-sm font-medium text-ink">
+                          {d.nickname || d.mac}
+                        </p>
+                        {d.nickname && (
+                          <p className="text-xs text-ink-light font-mono">{d.mac}</p>
+                        )}
+                        <p className="text-xs text-ink-light">
+                          {d.last_seen
+                            ? `上次在线: ${new Date(d.last_seen).toLocaleString("zh-CN")}`
+                            : "尚未上线"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/config?mac=${encodeURIComponent(d.mac)}`}>
+                        <Button size="sm" variant="outline">
+                          <Settings size={14} className="mr-1" /> 配置
+                        </Button>
+                      </Link>
+                      <button
+                        onClick={() => handleUnbindDevice(d.mac)}
+                        className="p-1.5 text-ink-light hover:text-red-600 transition-colors"
+                        title="解绑设备"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 p-3 rounded-sm border border-amber-200 bg-amber-50 text-sm text-amber-800">
+                <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">未绑定设备</p>
+                  <p className="text-xs mt-0.5">完成刷机和配网后，设备将自动出现在此处。</p>
+                  <p className="text-xs mt-1.5 animate-pulse">正在等待设备联网...（配网完成后将自动检测）</p>
+                </div>
+              </div>
+            )}
+
+            {/* Discovered device banner */}
+            {discoveredDevice && !userDevices.some((d) => d.mac === discoveredDevice) && (
+              <div className="flex items-start gap-2 p-3 rounded-sm border border-green-200 bg-green-50 text-sm text-green-800">
+                <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">已检测到新设备上线: {discoveredDevice}</p>
+                  <Button size="sm" className="mt-2" onClick={() => {
+                    window.location.href = `/config?mac=${encodeURIComponent(discoveredDevice)}`;
+                  }}>
+                    进入配置
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Manual bind */}
+            <div className="p-3 rounded-sm border border-ink/10 bg-paper">
+              <p className="text-sm font-medium text-ink mb-2 flex items-center gap-1">
+                <Plus size={14} /> 手动添加设备
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                <input
+                  value={bindMacInput}
+                  onChange={(e) => setBindMacInput(e.target.value)}
+                  placeholder="MAC 地址 (如 AA:BB:CC:DD:EE:FF)"
+                  className="flex-1 min-w-[200px] rounded-sm border border-ink/20 px-3 py-1.5 text-sm font-mono"
+                />
+                <input
+                  value={bindNicknameInput}
+                  onChange={(e) => setBindNicknameInput(e.target.value)}
+                  placeholder="别名（可选）"
+                  className="w-32 rounded-sm border border-ink/20 px-3 py-1.5 text-sm"
+                />
+                <Button size="sm" onClick={async () => {
+                  if (!bindMacInput.trim()) return;
+                  const ok = await handleBindDevice(bindMacInput.trim(), bindNicknameInput.trim());
+                  if (!ok) showToast("绑定失败（设备已绑定或 MAC 无效）", "error");
+                  else showToast("设备已绑定", "success");
+                }}>
+                  绑定
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {mac && currentUser && loading && (
+        <div className="flex items-center justify-center py-20 text-ink-light">
+          <Loader2 size={24} className="animate-spin mr-2" /> 加载配置中...
+        </div>
+      )}
+
+      {mac && currentUser && !loading && (
+        <div className="flex gap-6">
+          {/* Sidebar tabs */}
+          <nav className="w-44 flex-shrink-0 hidden md:block">
+            <div className="sticky top-24 space-y-1">
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-sm text-sm transition-colors ${
+                    activeTab === tab.id
+                      ? "bg-ink text-white font-medium"
+                      : "text-ink-light hover:bg-paper-dark hover:text-ink"
+                  }`}
+                >
+                  <tab.icon size={16} />
+                  {tab.label}
+                </button>
+              ))}
+              <div className="pt-4">
+                <Button
+                  variant="outline"
+                  onClick={handleSave}
+                  disabled={!mac || saving}
+                  className="w-full bg-white text-ink border-ink/20 hover:bg-ink hover:text-white active:bg-ink active:text-white disabled:bg-white disabled:text-ink/50"
+                >
+                  {saving ? <Loader2 size={14} className="animate-spin mr-1" /> : <Save size={14} className="mr-1" />}
+                  保存到设备
+                </Button>
+              </div>
+            </div>
+          </nav>
+
+          {/* Mobile tabs */}
+          <div className="md:hidden w-full mb-4 overflow-x-auto">
+            <div className="flex gap-1 min-w-max pb-2">
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-3 py-2 rounded-sm text-xs whitespace-nowrap transition-colors ${
+                    activeTab === tab.id ? "bg-ink text-white" : "bg-paper-dark text-ink-light"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0">
+            {/* Modes Tab */}
+            {activeTab === "modes" && (
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader><CardTitle className="flex items-center gap-2"><LayoutGrid size={18} /> 内容模式</CardTitle></CardHeader>
+                  <CardContent>
+                    <ModeGrid
+                      title="核心模式" modes={CORE_MODES}
+                      selectedModes={selectedModes} currentMode={currentMode} favoritedModes={favoritedModes}
+                      onPreview={handleModePreview} onApply={handleModeApply} onFavorite={handleModeFavorite}
+                      onSettings={(m) => setSettingsMode(m)}
+                    />
+                    <ModeGrid
+                      title="更多模式" modes={EXTRA_MODES} collapsible
+                      selectedModes={selectedModes} currentMode={currentMode} favoritedModes={favoritedModes}
+                      onPreview={handleModePreview} onApply={handleModeApply} onFavorite={handleModeFavorite}
+                      onSettings={(m) => setSettingsMode(m)}
+                    />
+                    <ModeGrid
+                      title="自定义模式"
+                      modes={customModes.map((cm) => cm.mode_id)}
+                      selectedModes={selectedModes}
+                      currentMode={currentMode}
+                      favoritedModes={favoritedModes}
+                      onPreview={handleModePreview}
+                      onApply={handleModeApply}
+                      onFavorite={handleModeFavorite}
+                      onSettings={(m) => setSettingsMode(m)}
+                      onDelete={handleDeleteCustomMode}
+                      customMeta={customModeMeta}
+                    />
+                    <div className="mb-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
+                        <div className="relative flex">
+                          <button
+                            onClick={() => { setEditingCustomMode(true); setCustomJson(""); setCustomDesc(""); setCustomModeName(""); setCustomPreviewImg(null); }}
+                            className="flex-1 aspect-square rounded-lg border border-dashed border-ink/20 p-1.5 flex flex-col items-center justify-center transition-all hover:border-ink/40 hover:bg-paper-dark bg-white text-ink-light"
+                          >
+                            <Plus size={18} className="mb-0.5" />
+                            <div className="text-[10px] leading-tight">新建</div>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {editingCustomMode ? (
+                      <div className="mt-4 pt-4 border-t border-ink/10">
+                        <div className="flex items-center gap-2 mb-4">
+                          <button onClick={() => setEditingCustomMode(false)} className="p-1 rounded hover:bg-paper-dark transition-colors">
+                            <ArrowLeft size={16} className="text-ink-light" />
+                          </button>
+                          <span className="text-sm font-medium">创建自定义模式</span>
+                        </div>
+
+                        <div className="flex gap-1 mb-4">
+                          <button onClick={() => setEditorTab("ai")} className={`px-3 py-1.5 rounded-sm text-xs transition-colors ${editorTab === "ai" ? "bg-ink text-white" : "bg-paper-dark text-ink-light hover:text-ink"}`}>
+                            <Sparkles size={12} className="inline mr-1" />AI 生成
+                          </button>
+                          <button onClick={() => setEditorTab("template")} className={`px-3 py-1.5 rounded-sm text-xs transition-colors ${editorTab === "template" ? "bg-ink text-white" : "bg-paper-dark text-ink-light hover:text-ink"}`}>
+                            <LayoutGrid size={12} className="inline mr-1" />从模板
+                          </button>
+                        </div>
+
+                        {editorTab === "ai" ? (
+                          <div className="space-y-3 mb-4">
+                            <textarea value={customDesc} onChange={(e) => setCustomDesc(e.target.value)} rows={3} maxLength={2000} placeholder="描述你想要的模式，如：每天显示一个英语单词和释义，单词要大号字体居中" className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm resize-y" />
+                            <Button size="sm" onClick={handleGenerateMode} disabled={customGenerating || !customDesc.trim()}>
+                              {customGenerating ? <><Loader2 size={14} className="animate-spin mr-1" /> 生成中...</> : "AI 生成模式"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="space-y-3 mb-4">
+                            <select onChange={(e) => { const t = MODE_TEMPLATES[e.target.value]; if (t) { setCustomJson(JSON.stringify(t.def, null, 2)); setCustomModeName((t.def?.display_name || "").toString()); } }} defaultValue="" className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white">
+                              <option value="" disabled>选择模板...</option>
+                              {Object.entries(MODE_TEMPLATES).map(([k, t]) => (
+                                <option key={k} value={k}>{t.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="space-y-3">
+                          <input
+                            value={customModeName}
+                            onChange={(e) => setCustomModeName(e.target.value)}
+                            placeholder="模式名称（例如：今日英语）"
+                            className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white"
+                          />
+                          <textarea value={customJson} onChange={(e) => setCustomJson(e.target.value)} rows={14} spellCheck={false} placeholder="模式 JSON 定义" className="ink-strong-select w-full rounded-sm border border-ink/20 px-3 py-2 text-xs font-mono resize-y bg-ink text-green-400" />
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" onClick={handleCustomPreview} disabled={!customJson.trim() || customPreviewLoading}>
+                              {customPreviewImg ? "重新生成预览" : "预览效果"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleApplyCustomPreviewToScreen}
+                              disabled={!mac || !customPreviewImg || customPreviewLoading || customApplyToScreenLoading}
+                            >
+                              {customApplyToScreenLoading ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
+                              应用到墨水屏
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleSaveCustomMode}
+                              disabled={!customJson.trim()}
+                              className="bg-white text-ink border-ink/20 hover:bg-ink hover:text-white active:bg-ink active:text-white disabled:bg-white disabled:text-ink/50"
+                            >
+                              保存模式
+                            </Button>
+                          </div>
+                          {(customPreviewLoading || customPreviewImg) && (
+                            <div className="mt-3 border border-ink/10 rounded-sm p-2 bg-paper flex justify-center">
+                              {customPreviewLoading ? (
+                                <div className="flex items-center gap-2 text-ink-light text-sm py-8">
+                                  <Loader2 size={18} className="animate-spin" /> 预览生成中...
+                                </div>
+                              ) : (
+                                <img src={customPreviewImg!} alt="Custom preview" className="max-w-[400px] w-full border border-ink/10" />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-xs text-ink-light mt-3">已选 {selectedModes.size} 个模式</p>
+                        <div className="mt-6 pt-6 border-t border-ink/10">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Eye size={16} className="text-ink-light" />
+                            <span className="text-sm font-medium">
+                              预览{previewMode ? `：${MODE_META[previewMode]?.name || customModeMeta[previewMode]?.name || previewMode}` : ""}
+                            </span>
+                            {previewLoading && <Loader2 size={14} className="animate-spin text-ink-light" />}
+                          </div>
+                          <div className="mb-3">
+                            {previewImg && !previewLoading && previewCacheHit === true && (
+                              <div className="mb-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-sm px-2 py-1.5">
+                                当前预览为历史缓存。如需查看最新效果，请点击“重新生成预览”。
+                              </div>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handlePreview(undefined, true)}
+                              disabled={!previewMode || previewLoading}
+                              className="bg-white text-ink border-ink/20 hover:bg-ink hover:text-white active:bg-ink active:text-white disabled:bg-white disabled:text-ink/50 mr-2"
+                            >
+                              重新生成预览
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleApplyPreviewToScreen}
+                              disabled={!mac || !previewMode || !previewImg || previewLoading || applyToScreenLoading}
+                              className="bg-white text-ink border-ink/20 hover:bg-ink hover:text-white active:bg-ink active:text-white disabled:bg-white disabled:text-ink/50"
+                            >
+                              {applyToScreenLoading ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
+                              应用到墨水屏
+                            </Button>
+                          </div>
+                          {previewLoading ? (
+                            <div className="border border-ink/10 rounded-sm p-3 bg-paper flex justify-center">
+                              <div className="flex items-center gap-2 text-ink-light text-sm py-8">
+                                <Loader2 size={18} className="animate-spin" /> 预览生成中...
+                              </div>
+                            </div>
+                          ) : previewImg ? (
+                            <div className="border border-ink/10 rounded-sm p-3 bg-paper flex justify-center">
+                              <img src={previewImg} alt="Preview" className="max-w-[400px] w-full border border-ink/10" />
+                            </div>
+                          ) : (
+                            <div className="text-sm text-ink-light text-center py-8">
+                              点击任意模式的「预览」查看效果
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+
+              </div>
+            )}
+
+            {/* Preferences Tab */}
+            {activeTab === "preferences" && (
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2"><Globe size={18} /> 个性化设置</CardTitle></CardHeader>
+                <CardContent className="space-y-5">
+                  <Field label="城市（全局默认）">
+                    <input
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      placeholder="如：深圳"
+                      className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm"
+                    />
+                  </Field>
+                  <Field label="语言">
+                    <div className="flex flex-wrap gap-2">
+                      {LANGUAGE_OPTIONS.map((opt) => (
+                        <Chip key={opt.value} selected={language === opt.value} onClick={() => setLanguage(opt.value)}>{opt.label}</Chip>
+                      ))}
+                    </div>
+                  </Field>
+                  <Field label="内容语气">
+                    <div className="flex flex-wrap gap-2">
+                      {TONE_OPTIONS.map((opt) => (
+                        <Chip key={opt.value} selected={contentTone === opt.value} onClick={() => setContentTone(opt.value)}>{opt.label}</Chip>
+                      ))}
+                    </div>
+                  </Field>
+                  <Field label="人设风格">
+                    <div className="flex flex-wrap gap-2">
+                      {PERSONA_PRESETS.map((v) => (
+                        <Chip key={v} selected={characterTones.includes(v)} onClick={() => {
+                          setCharacterTones((prev) => prev.includes(v) ? prev.filter((t) => t !== v) : [...prev, v]);
+                        }}>{v}</Chip>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        value={customPersonaTone}
+                        onChange={(e) => setCustomPersonaTone(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleAddCustomPersona();
+                          }
+                        }}
+                        placeholder="自定义人设风格"
+                        className="flex-1 rounded-sm border border-ink/20 px-3 py-2 text-sm"
+                      />
+                      <Button variant="outline" size="sm" onClick={handleAddCustomPersona}>
+                        添加
+                      </Button>
+                    </div>
+                    {characterTones.filter((v) => !PERSONA_PRESETS.includes(v as typeof PERSONA_PRESETS[number])).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {characterTones
+                          .filter((v) => !PERSONA_PRESETS.includes(v as typeof PERSONA_PRESETS[number]))
+                          .map((v) => (
+                            <Chip
+                              key={v}
+                              selected
+                              onClick={() => setCharacterTones((prev) => prev.filter((t) => t !== v))}
+                            >
+                              {v}
+                            </Chip>
+                          ))}
+                      </div>
+                    )}
+                  </Field>
+                  <Field label="刷新策略">
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      {Object.entries(STRATEGIES).map(([k, desc]) => (
+                        <button
+                          key={k}
+                          onClick={() => setStrategy(k)}
+                          className={`group p-3 rounded-sm border text-left transition-colors ${
+                            strategy === k ? "border-ink bg-ink text-white" : "border-ink/10 hover:bg-ink hover:text-white"
+                          }`}
+                        >
+                          <div className="text-sm font-medium">{k}</div>
+                          <div className={`text-xs mt-1 ${strategy === k ? "text-white/70" : "text-ink-light group-hover:text-white/80"}`}>{desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <label className="block text-sm font-medium mb-2">刷新间隔 (分钟)</label>
+                    <input
+                      type="number"
+                      min={10}
+                      max={1440}
+                      value={refreshMin}
+                      onChange={(e) => setRefreshMin(Number(e.target.value))}
+                      className="w-32 rounded-sm border border-ink/20 px-3 py-2 text-sm"
+                    />
+                  </Field>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* AI Model Tab */}
+            {activeTab === "ai" && (
+              <Card>
+                <CardHeader><CardTitle className="flex items-center gap-2"><Cpu size={18} /> AI 模型</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <Field label="文本模型服务商">
+                    <select value={llmProvider} onChange={(e) => { setLlmProvider(e.target.value); setLlmModel(LLM_MODELS[e.target.value]?.[0]?.v || ""); }} className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white">
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="aliyun">阿里百炼</option>
+                      <option value="moonshot">月之暗面 (Kimi)</option>
+                    </select>
+                  </Field>
+                  <Field label="文本模型">
+                    <select value={llmModel} onChange={(e) => setLlmModel(e.target.value)} className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white">
+                      {(LLM_MODELS[llmProvider] || []).map((m) => (
+                        <option key={m.v} value={m.v}>{m.n}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="文本 API Key">
+                    <input
+                      type="password"
+                      value={llmApiKey}
+                      onChange={(e) => setLlmApiKey(e.target.value)}
+                      placeholder={config.has_api_key ? "已配置，留空不修改" : "可选，设备专用 Key，留空使用服务器默认"}
+                      className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white font-mono"
+                      autoComplete="off"
+                    />
+                  </Field>
+                  <Field label="图像模型服务商">
+                    <select value={imageProvider} onChange={(e) => { setImageProvider(e.target.value); setImageModel(IMAGE_MODELS[e.target.value]?.[0]?.v || ""); }} className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white">
+                      <option value="aliyun">阿里百炼</option>
+                    </select>
+                  </Field>
+                  <Field label="图像模型">
+                    <select value={imageModel} onChange={(e) => setImageModel(e.target.value)} className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white">
+                      {(IMAGE_MODELS[imageProvider] || []).map((m) => (
+                        <option key={m.v} value={m.v}>{m.n}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="图像 API Key">
+                    <input
+                      type="password"
+                      value={imageApiKey}
+                      onChange={(e) => setImageApiKey(e.target.value)}
+                      placeholder={config.has_image_api_key ? "已配置，留空不修改" : "可选，设备专用 Key，留空使用服务器默认"}
+                      className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white font-mono"
+                      autoComplete="off"
+                    />
+                  </Field>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Stats Tab */}
+            {activeTab === "stats" && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 size={18} /> 设备状态
+                    {mac && <Button variant="ghost" size="sm" onClick={loadStats}><RefreshCw size={12} /></Button>}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {!mac && <p className="text-sm text-ink-light">需要连接设备后才能查看状态</p>}
+                  {mac && !stats && <p className="text-sm text-ink-light">暂无统计数据</p>}
+                  {stats && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                      <StatCard label="总渲染次数" value={stats.total_renders ?? "-"} />
+                      <StatCard label="缓存命中率" value={stats.cache_hit_rate != null ? `${Math.round(stats.cache_hit_rate * 100)}%` : "-"} />
+                      <StatCard label="电量" value={batteryPct != null ? `${batteryPct}%` : "-"} />
+                      <StatCard label="电压" value={stats.last_battery_voltage ? `${stats.last_battery_voltage.toFixed(2)}V` : "-"} />
+                      <StatCard label="WiFi 信号" value={stats.last_rssi ? `${stats.last_rssi} dBm` : "-"} />
+                      <StatCard label="错误次数" value={stats.error_count ?? "-"} />
+                      {stats.last_refresh && <StatCard label="上次刷新" value={new Date(stats.last_refresh).toLocaleString("zh-CN")} />}
+                    </div>
+                  )}
+                  {stats?.mode_frequency && Object.keys(stats.mode_frequency).length > 0 && (
+                    <div className="mt-6">
+                      <h4 className="text-sm font-medium mb-3">模式使用频率</h4>
+                      <div className="space-y-2">
+                        {Object.entries(stats.mode_frequency)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([mode, count]) => {
+                            const max = Math.max(...Object.values(stats.mode_frequency!));
+                            return (
+                              <div key={mode} className="flex items-center gap-2 text-sm">
+                                <span className="w-20 text-ink-light truncate">{MODE_META[mode]?.name || mode}</span>
+                                <div className="flex-1 bg-paper-dark rounded-full h-4 overflow-hidden">
+                                  <div className="bg-ink h-full rounded-full" style={{ width: `${(count / max) * 100}%` }} />
+                                </div>
+                                <span className="w-8 text-right text-ink-light text-xs">{count}</span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {settingsMode && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/30" onClick={() => setSettingsMode(null)} />
+              <Card className="relative z-10 w-full max-w-md">
+                <CardHeader>
+                  <CardTitle className="flex items-center justify-between text-base">
+                    <span>
+                      模式设置：{MODE_META[settingsMode]?.name || customModeMeta[settingsMode]?.name || settingsMode}
+                    </span>
+                    <button className="text-ink-light hover:text-ink" onClick={() => setSettingsMode(null)}>
+                      <X size={16} />
+                    </button>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <Field label="API 服务商">
+                    <select
+                      value={getModeOverride(settingsMode).llm_provider || llmProvider}
+                      onChange={(e) => {
+                        const provider = e.target.value;
+                        const defaultModel = LLM_MODELS[provider]?.[0]?.v || "";
+                        const currentModel = getModeOverride(settingsMode).llm_model || llmModel;
+                        const modelAllowed = (LLM_MODELS[provider] || []).some((m) => m.v === currentModel);
+                        updateModeOverride(settingsMode, {
+                          llm_provider: provider,
+                          llm_model: modelAllowed ? currentModel : defaultModel,
+                        });
+                      }}
+                      className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="aliyun">阿里百炼</option>
+                      <option value="moonshot">月之暗面 (Kimi)</option>
+                    </select>
+                  </Field>
+                  <Field label="模型">
+                    <select
+                      value={getModeOverride(settingsMode).llm_model || llmModel}
+                      onChange={(e) => updateModeOverride(settingsMode, { llm_model: e.target.value })}
+                      className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white"
+                    >
+                      {(LLM_MODELS[getModeOverride(settingsMode).llm_provider || llmProvider] || []).map((m) => (
+                        <option key={m.v} value={m.v}>{m.n}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="城市（可选）">
+                    <input
+                      value={getModeOverride(settingsMode).city || ""}
+                      onChange={(e) => updateModeOverride(settingsMode, { city: e.target.value })}
+                      placeholder={`留空使用全局默认：${city || "杭州"}`}
+                      className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm"
+                    />
+                  </Field>
+                  {activeModeSchema.map((item) => {
+                    const key = `${settingsMode}:${item.key}`;
+                    const override = getModeOverride(settingsMode);
+                    const rawValue = override[item.key] ?? item.default;
+                    const valueType = item.type || "text";
+                    const options = (item.options || []).map((opt) => typeof opt === "string"
+                      ? { value: opt, label: opt }
+                      : { value: opt.value, label: opt.label });
+
+                    if (settingsMode === "COUNTDOWN" && item.key === "countdownEvents") {
+                      const events = Array.isArray(rawValue)
+                        ? rawValue.map((ev) => ({
+                            name: typeof ev?.name === "string" ? ev.name : "",
+                            date: typeof ev?.date === "string" ? ev.date : "",
+                            type: ev?.type === "countup" ? "countup" : "countdown",
+                          }))
+                        : [];
+                      return (
+                        <Field key={key} label="倒计时事件">
+                          {events.map((ev, i) => (
+                            <div key={`${key}:${i}`} className="flex gap-2 mb-2">
+                              <input
+                                value={ev.name}
+                                onChange={(e) => {
+                                  const next = [...events];
+                                  next[i] = { ...next[i], name: e.target.value };
+                                  updateModeOverride(settingsMode, { [item.key]: next });
+                                }}
+                                placeholder="事件名"
+                                className="flex-1 rounded-sm border border-ink/20 px-3 py-1.5 text-sm"
+                              />
+                              <input
+                                type="date"
+                                value={ev.date}
+                                onChange={(e) => {
+                                  const next = [...events];
+                                  next[i] = { ...next[i], date: e.target.value };
+                                  updateModeOverride(settingsMode, { [item.key]: next });
+                                }}
+                                className="rounded-sm border border-ink/20 px-3 py-1.5 text-sm"
+                              />
+                              <select
+                                value={ev.type}
+                                onChange={(e) => {
+                                  const next = [...events];
+                                  next[i] = { ...next[i], type: e.target.value === "countup" ? "countup" : "countdown" };
+                                  updateModeOverride(settingsMode, { [item.key]: next });
+                                }}
+                                className="rounded-sm border border-ink/20 px-2 py-1.5 text-sm bg-white"
+                              >
+                                <option value="countdown">倒计时</option>
+                                <option value="countup">正计时</option>
+                              </select>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  const next = events.filter((_, j) => j !== i);
+                                  updateModeOverride(settingsMode, { [item.key]: next });
+                                }}
+                              >
+                                x
+                              </Button>
+                            </div>
+                          ))}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              const next = [...events, { name: "", date: "", type: "countdown" }];
+                              updateModeOverride(settingsMode, { [item.key]: next });
+                            }}
+                          >
+                            + 添加事件
+                          </Button>
+                        </Field>
+                      );
+                    }
+
+                    if (item.as_json) {
+                      const draft = settingsJsonDrafts[key] ?? (
+                        rawValue === undefined ? "" : JSON.stringify(rawValue, null, 2)
+                      );
+                      return (
+                        <Field key={key} label={item.label}>
+                          <textarea
+                            value={draft}
+                            onChange={(e) => {
+                              setSettingsJsonDrafts((prev) => ({ ...prev, [key]: e.target.value }));
+                            }}
+                            onBlur={() => {
+                              const text = settingsJsonDrafts[key] ?? "";
+                              if (!text.trim()) {
+                                updateModeOverride(settingsMode, { [item.key]: undefined });
+                                setSettingsJsonErrors((prev) => {
+                                  const copied = { ...prev };
+                                  delete copied[key];
+                                  return copied;
+                                });
+                                return;
+                              }
+                              try {
+                                const parsed = JSON.parse(text);
+                                updateModeOverride(settingsMode, { [item.key]: parsed });
+                                setSettingsJsonErrors((prev) => {
+                                  const copied = { ...prev };
+                                  delete copied[key];
+                                  return copied;
+                                });
+                              } catch {
+                                setSettingsJsonErrors((prev) => ({ ...prev, [key]: "JSON 格式错误" }));
+                              }
+                            }}
+                            rows={4}
+                            placeholder={item.placeholder}
+                            className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm font-mono"
+                          />
+                          {settingsJsonErrors[key] ? (
+                            <p className="mt-1 text-xs text-red-600">{settingsJsonErrors[key]}</p>
+                          ) : null}
+                        </Field>
+                      );
+                    }
+
+                    if (valueType === "textarea") {
+                      return (
+                        <Field key={key} label={item.label}>
+                          <textarea
+                            ref={settingsMode === "MEMO" && item.key === "memo_text" ? memoSettingsInputRef : undefined}
+                            value={typeof rawValue === "string" ? rawValue : ""}
+                            onChange={(e) => {
+                              const next = e.target.value;
+                              updateModeOverride(settingsMode, { [item.key]: next });
+                              if (settingsMode === "MEMO" && item.key === "memo_text") {
+                                setMemoText(next);
+                              }
+                            }}
+                            rows={3}
+                            placeholder={item.placeholder}
+                            className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm"
+                          />
+                        </Field>
+                      );
+                    }
+
+                    if (valueType === "number") {
+                      return (
+                        <Field key={key} label={item.label}>
+                          <input
+                            type="number"
+                            value={typeof rawValue === "number" ? rawValue : (item.default as number | undefined) ?? ""}
+                            min={item.min}
+                            max={item.max}
+                            step={item.step}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (!v) {
+                                updateModeOverride(settingsMode, { [item.key]: undefined });
+                                return;
+                              }
+                              updateModeOverride(settingsMode, { [item.key]: Number(v) });
+                            }}
+                            className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm"
+                          />
+                        </Field>
+                      );
+                    }
+
+                    if (valueType === "boolean") {
+                      const checked = Boolean(rawValue);
+                      return (
+                        <Field key={key} label={item.label}>
+                          <label className="inline-flex items-center gap-2 text-sm text-ink">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => updateModeOverride(settingsMode, { [item.key]: e.target.checked })}
+                            />
+                            启用
+                          </label>
+                        </Field>
+                      );
+                    }
+
+                    if (valueType === "select" && options.length > 0) {
+                      const current = typeof rawValue === "string" ? rawValue : options[0].value;
+                      return (
+                        <Field key={key} label={item.label}>
+                          <select
+                            value={current}
+                            onChange={(e) => updateModeOverride(settingsMode, { [item.key]: e.target.value })}
+                            className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm bg-white"
+                          >
+                            {options.map((opt) => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </Field>
+                      );
+                    }
+
+                    return (
+                      <Field key={key} label={item.label}>
+                        <input
+                          value={typeof rawValue === "string" ? rawValue : ""}
+                          onChange={(e) => updateModeOverride(settingsMode, { [item.key]: e.target.value })}
+                          placeholder={item.placeholder}
+                          className="w-full rounded-sm border border-ink/20 px-3 py-2 text-sm"
+                        />
+                      </Field>
+                    );
+                  })}
+                  <div className="flex items-center justify-between">
+                    <Button variant="outline" size="sm" onClick={() => clearModeOverride(settingsMode)}>
+                      恢复默认
+                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => handlePreviewFromSettings(false)}>
+                        预览
+                      </Button>
+                      <Button
+                        variant={settingsMode && selectedModes.has(settingsMode) ? "default" : "outline"}
+                        size="sm"
+                        className={
+                          settingsMode && selectedModes.has(settingsMode)
+                            ? "bg-ink text-white border-ink hover:bg-ink hover:text-white"
+                            : "bg-white text-ink border-ink/20 hover:bg-ink hover:text-white active:bg-ink active:text-white"
+                        }
+                        onClick={() => handlePreviewFromSettings(true)}
+                      >
+                        预览并加入轮播
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Mobile save button */}
+      {mac && (
+        <div className="md:hidden fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-ink/10">
+          <Button
+            variant="outline"
+            onClick={handleSave}
+            disabled={!mac || saving}
+            className="w-full bg-white text-ink border-ink/20 hover:bg-ink hover:text-white active:bg-ink active:text-white disabled:bg-white disabled:text-ink/50"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin mr-1" /> : <Save size={14} className="mr-1" />}
+            保存到设备
+          </Button>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-sm text-sm font-medium shadow-lg animate-fade-in ${
+          toast.type === "success" ? "bg-green-50 text-green-800 border border-green-200"
+          : toast.type === "error" ? "bg-red-50 text-red-800 border border-red-200"
+          : "bg-amber-50 text-amber-800 border border-amber-200"
+        }`}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModeGrid({
+  title,
+  modes,
+  selectedModes,
+  currentMode,
+  favoritedModes,
+  onPreview,
+  onApply,
+  onFavorite,
+  onSettings,
+  onDelete,
+  customMeta,
+  collapsible,
+}: {
+  title: string;
+  modes: string[];
+  selectedModes: Set<string>;
+  currentMode: string;
+  favoritedModes: Set<string>;
+  onPreview: (m: string) => void;
+  onApply: (m: string) => void;
+  onFavorite: (m: string) => void;
+  onSettings: (m: string) => void;
+  onDelete?: (m: string) => void;
+  customMeta?: Record<string, { name: string; tip: string }>;
+  collapsible?: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(!!collapsible);
+  const [openMode, setOpenMode] = useState<string | null>(null);
+  if (modes.length === 0) return null;
+  return (
+    <div className="mb-4">
+      <div className="flex items-center gap-2 mb-2">
+        <h4 className="text-sm font-medium text-ink-light">{title}</h4>
+        {collapsible && (
+          <button onClick={() => setCollapsed(!collapsed)} className="text-xs text-ink-light hover:text-ink flex items-center gap-1 transition-colors">
+            {collapsed ? "展开" : "收起"}
+            <ChevronDown size={14} className={`transition-transform ${collapsed ? "" : "rotate-180"}`} />
+          </button>
+        )}
+      </div>
+      {!collapsed && (
+        <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+          {modes.map((m) => {
+            const meta = customMeta?.[m] || MODE_META[m] || { name: m, tip: "" };
+            const isSelected = selectedModes.has(m);
+            const isCurrent = currentMode === m;
+            const isFavorited = favoritedModes.has(m);
+            const sel = isSelected;
+            const isOpen = openMode === m;
+            const menuItems = [
+              {
+                key: "preview",
+                label: "预览",
+                icon: Eye,
+                onClick: () => onPreview(m),
+              },
+              {
+                key: "apply",
+                label: isSelected ? "移出轮播" : "加入轮播",
+                icon: Plus,
+                onClick: () => onApply(m),
+              },
+              {
+                key: "favorite",
+                label: isFavorited ? "取消收藏" : "收藏",
+                icon: Heart,
+                onClick: () => onFavorite(m),
+                iconClass: isFavorited ? "fill-current text-ink/70" : "text-ink/50",
+              },
+              {
+                key: "settings",
+                label: "设置",
+                icon: Settings,
+                onClick: () => onSettings(m),
+              },
+              ...(onDelete
+                ? [{
+                    key: "delete",
+                    label: "删除",
+                    icon: Trash2,
+                    onClick: () => onDelete(m),
+                  }]
+                : []),
+            ];
+            return (
+              <div key={m} className="relative flex">
+                <div className="flex-1 aspect-square relative">
+                  <button
+                    onClick={() => setOpenMode(isOpen ? null : m)}
+                    className={`w-full h-full rounded-lg border-r-0 rounded-r-none border p-1.5 flex flex-col justify-center transition-all ${
+                      sel ? "bg-ink text-white border-ink" : "bg-white text-ink border-ink/10 hover:border-ink/30"
+                    }`}
+                  >
+                    <div className="font-semibold text-sm leading-tight text-center">{meta.name}</div>
+                  </button>
+                  {isOpen && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setOpenMode(null)} />
+                      <div className="absolute inset-0 z-20 bg-white border border-ink/15 rounded-lg shadow-lg flex flex-col justify-center py-0.5">
+                        {menuItems.map((item) => {
+                          const Icon = item.icon;
+                          return (
+                            <button
+                              key={item.key}
+                              onClick={() => { item.onClick(); setOpenMode(null); }}
+                              className="flex-1 px-1 py-0.5 text-[10px] leading-none text-ink hover:bg-paper-dark rounded-sm flex items-center justify-center gap-1 whitespace-nowrap"
+                            >
+                              <Icon size={10} className={`shrink-0 ${item.iconClass || "text-ink/50"}`} />
+                              {item.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="flex flex-col items-center justify-center gap-0 px-0.5 rounded-r-lg border border-l-0 transition-all bg-white border-ink/10">
+                  <button onClick={() => onPreview(m)} className="p-0.5 rounded transition-colors hover:bg-ink/10">
+                    <Eye size={10} className="text-ink/35" />
+                  </button>
+                  <button onClick={() => onApply(m)} className="p-0.5 rounded transition-colors hover:bg-ink/10">
+                    <Plus size={10} className={isSelected ? "text-ink" : "text-ink/20"} />
+                  </button>
+                  <button onClick={() => onFavorite(m)} className="p-0.5 rounded transition-colors hover:bg-ink/10">
+                    <Heart size={10} className={`${isFavorited ? "fill-current text-ink" : "text-ink/20"}`} />
+                  </button>
+                  <button onClick={() => onSettings(m)} className="p-0.5 rounded transition-colors hover:bg-ink/10">
+                    <Settings size={10} className="text-ink/35" />
+                  </button>
+                  {onDelete && (
+                    <button onClick={() => onDelete(m)} className="p-0.5 rounded transition-colors hover:bg-ink/10">
+                      <Trash2 size={10} className="text-ink/35" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Chip({ children, selected, onClick }: { children: string; selected: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`group px-3 py-1.5 rounded-full text-xs border transition-colors ${
+        selected ? "bg-ink text-white border-ink" : "bg-white text-ink-light border-ink/15 hover:bg-ink hover:text-white hover:border-ink"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-ink mb-1.5">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function StatCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="p-3 rounded-sm border border-ink/10 bg-paper">
+      <div className="text-xs text-ink-light">{label}</div>
+      <div className="text-lg font-semibold text-ink mt-1">{value}</div>
+    </div>
+  );
+}
+
+export default function ConfigPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen text-ink-light"><Loader2 size={24} className="animate-spin mr-2" /> 加载中...</div>}>
+      <ConfigPageInner />
+    </Suspense>
+  );
+}

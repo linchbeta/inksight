@@ -47,8 +47,8 @@ static const int   WIFI_TIMEOUT    = 15000;   // ms
 static const int   HTTP_TIMEOUT    = 30000;   // ms
 static const int   CFG_BTN_HOLD_MS = 2000;    // Long press duration to trigger config mode
 static const int   SHORT_PRESS_MIN_MS = 50;   // Minimum short press duration (debounce)
-static const int   DOUBLE_CLICK_MS = 500;     // Max interval between clicks for double-click
-static const int   TRIPLE_CLICK_MS = 500;     // Max interval for third click (favorite)
+static const int   LIVE_POLL_MS = 5000;       // Poll interval for pending remote actions
+static const int   LIVE_WIFI_RETRY_MS = 5000; // Retry interval when WiFi is disconnected
 static const int   MAX_RETRY_COUNT = 5;       // Max retries before deep sleep
 // Progressive retry delays in seconds: 5s, 15s, 30s, 60s, 120s
 static const int   RETRY_DELAYS[] = {5, 15, 30, 60, 120};
@@ -64,9 +64,12 @@ static const int DEBUG_REFRESH_MIN = 1;  // 1 minute for debugging
 
 // ── Time display region (partial refresh area) ──────────────
 // Proportional to screen size (scales across 2.9"/4.2"/7.5")
-#define TIME_RGN_X0   (W * 2 / 100)
-#define TIME_RGN_X1   (W * 16 / 100)
+#define TIME_RGN_X0   (0)
+#define TIME_RGN_X1   ((W * 14 / 100) & ~7)
 #define TIME_RGN_Y0   (H * 2 / 100)
 #define TIME_RGN_Y1   (H * 8 / 100)
+
+#define TIME_TEXT_X   (W * 1 / 100)
+#define TIME_TEXT_Y   (H * 4 / 100)
 
 #endif // INKSIGHT_CONFIG_H

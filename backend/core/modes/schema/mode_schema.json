@@ -30,6 +30,42 @@
       "maxLength": 200,
       "description": "Short description of the mode"
     },
+    "settings_schema": {
+      "type": "array",
+      "description": "Optional per-mode settings schema for UI rendering",
+      "items": {
+        "type": "object",
+        "required": ["key", "label"],
+        "properties": {
+          "key": { "type": "string" },
+          "label": { "type": "string" },
+          "type": { "type": "string", "enum": ["text", "textarea", "number", "select", "boolean"] },
+          "placeholder": { "type": "string" },
+          "default": {},
+          "min": { "type": "number" },
+          "max": { "type": "number" },
+          "step": { "type": "number" },
+          "description": { "type": "string" },
+          "as_json": { "type": "boolean" },
+          "options": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string" },
+                {
+                  "type": "object",
+                  "required": ["value", "label"],
+                  "properties": {
+                    "value": { "type": "string" },
+                    "label": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
     "content": {
       "$ref": "#/definitions/content_def"
     },

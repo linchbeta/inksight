@@ -8,13 +8,30 @@
 
 const uint8_t* getGlyph(char c) {
     // Uppercase letters
+    static const uint8_t g_A[] = {0x7E,0x11,0x11,0x11,0x7E};
+    static const uint8_t g_B[] = {0x7F,0x49,0x49,0x49,0x36};
     static const uint8_t g_C[] = {0x3E,0x41,0x41,0x41,0x22};
+    static const uint8_t g_D[] = {0x7F,0x41,0x41,0x22,0x1C};
+    static const uint8_t g_E[] = {0x7F,0x49,0x49,0x49,0x41};
     static const uint8_t g_F[] = {0x7F,0x09,0x09,0x09,0x01};
+    static const uint8_t g_G[] = {0x3E,0x41,0x49,0x49,0x3A};
+    static const uint8_t g_H[] = {0x7F,0x08,0x08,0x08,0x7F};
     static const uint8_t g_I[] = {0x00,0x41,0x7F,0x41,0x00};
+    static const uint8_t g_K[] = {0x7F,0x08,0x14,0x22,0x41};
+    static const uint8_t g_L[] = {0x7F,0x40,0x40,0x40,0x40};
+    static const uint8_t g_M[] = {0x7F,0x02,0x0C,0x02,0x7F};
+    static const uint8_t g_N[] = {0x7F,0x04,0x08,0x10,0x7F};
     static const uint8_t g_O[] = {0x3E,0x41,0x41,0x41,0x3E};
+    static const uint8_t g_P[] = {0x7F,0x09,0x09,0x09,0x06};
     static const uint8_t g_R[] = {0x7F,0x09,0x19,0x29,0x46};
     static const uint8_t g_S[] = {0x26,0x49,0x49,0x49,0x32};
+    static const uint8_t g_T[] = {0x01,0x01,0x7F,0x01,0x01};
+    static const uint8_t g_U[] = {0x3F,0x40,0x40,0x40,0x3F};
+    static const uint8_t g_V[] = {0x1F,0x20,0x40,0x20,0x1F};
     static const uint8_t g_W[] = {0x3F,0x40,0x38,0x40,0x3F};
+    static const uint8_t g_X[] = {0x63,0x14,0x08,0x14,0x63};
+    static const uint8_t g_Y[] = {0x07,0x08,0x70,0x08,0x07};
+    static const uint8_t g_Z[] = {0x61,0x51,0x49,0x45,0x43};
 
     // Lowercase letters
     static const uint8_t g_a[] = {0x20,0x54,0x54,0x54,0x78};
@@ -54,13 +71,21 @@ const uint8_t* getGlyph(char c) {
     // Special characters
     static const uint8_t g_colon[] = {0x00,0x00,0x36,0x36,0x00};
     static const uint8_t g_dash[]  = {0x08,0x08,0x08,0x08,0x08};
+    static const uint8_t g_dot[]   = {0x00,0x60,0x60,0x00,0x00};
+    static const uint8_t g_slash[] = {0x20,0x10,0x08,0x04,0x02};
+    static const uint8_t g_exclam[]= {0x00,0x00,0x5F,0x00,0x00};
     static const uint8_t g_space[] = {0x00,0x00,0x00,0x00,0x00};
 
     switch (c) {
         // Uppercase
-        case 'C': return g_C; case 'F': return g_F; case 'I': return g_I;
-        case 'O': return g_O; case 'R': return g_R; case 'S': return g_S;
-        case 'W': return g_W;
+        case 'A': return g_A; case 'B': return g_B; case 'C': return g_C;
+        case 'D': return g_D; case 'E': return g_E; case 'F': return g_F;
+        case 'G': return g_G; case 'H': return g_H; case 'I': return g_I;
+        case 'K': return g_K; case 'L': return g_L; case 'M': return g_M;
+        case 'N': return g_N; case 'O': return g_O; case 'P': return g_P;
+        case 'R': return g_R; case 'S': return g_S; case 'T': return g_T;
+        case 'U': return g_U; case 'V': return g_V; case 'W': return g_W;
+        case 'X': return g_X; case 'Y': return g_Y; case 'Z': return g_Z;
         // Lowercase
         case 'a': return g_a; case 'b': return g_b; case 'c': return g_c;
         case 'd': return g_d; case 'e': return g_e; case 'f': return g_f;
@@ -76,6 +101,8 @@ const uint8_t* getGlyph(char c) {
         case '9': return g_9;
         // Special
         case ':': return g_colon; case '-': return g_dash;
+        case '.': return g_dot;   case '/': return g_slash;
+        case '!': return g_exclam;
         default:  return g_space;
     }
 }
@@ -150,6 +177,41 @@ void showSetupScreen(const char *apName) {
     Serial.printf("Setup screen shown: %s\n", apName);
 }
 
+// ── Show diagnostic screen ──────────────────────────────────
+
+void showDiagnostic(const char *line1, const char *line2, const char *line3, const char *line4) {
+    memset(imgBuf, 0xFF, IMG_BUF_LEN);
+
+    int titleScale = (H < 200) ? 2 : 3;
+    int bodyScale  = (H < 200) ? 1 : 2;
+
+    int y = H * 10 / 100;
+    int lh = 7 * titleScale + titleScale * 2;
+    int blh = 7 * bodyScale + bodyScale * 2;
+
+    if (line1 && line1[0]) {
+        int x = (W - textWidth(strlen(line1), titleScale)) / 2;
+        if (x < 4) x = 4;
+        drawText(line1, x, y, titleScale);
+        y += lh + 4;
+    }
+
+    int infoX = W * 5 / 100;
+    if (line2 && line2[0]) {
+        drawText(line2, infoX, y, bodyScale);
+        y += blh;
+    }
+    if (line3 && line3[0]) {
+        drawText(line3, infoX, y, bodyScale);
+        y += blh;
+    }
+    if (line4 && line4[0]) {
+        drawText(line4, infoX, y, bodyScale);
+    }
+
+    epdDisplay(imgBuf);
+}
+
 // ── Show centered error message ─────────────────────────────
 
 void showError(const char *msg) {
@@ -182,8 +244,8 @@ void updateTimeDisplay() {
 
     int charW = 5;
     int gap = 1;
-    int sx = int(W * 0.03f) - TIME_RGN_X0 - 4;
-    int sy = int(H * 0.03f) - TIME_RGN_Y0 + 5;
+    int sx = TIME_TEXT_X - TIME_RGN_X0;
+    int sy = TIME_TEXT_Y - TIME_RGN_Y0;
     if (sx < 0) sx = 0;
     if (sy < 0) sy = 0;
 

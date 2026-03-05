@@ -11,11 +11,13 @@ type DocConfig = {
 };
 
 const DOCS: Record<string, DocConfig> = {
+  architecture: { title: "架构说明", file: "architecture.md" },
   hardware: { title: "硬件清单", file: "hardware.md" },
   assembly: { title: "组装指南", file: "assembly.md" },
   flash: { title: "Web 在线刷机", file: "flash.md" },
+  "button-controls": { title: "按键说明", file: "button-controls.md" },
   "api-key": { title: "配置 API Key", file: "api-key.md" },
-  config: { title: "Web 配置后台", file: "config.md" },
+  config: { title: "Web 在线配置", file: "config.md" },
   "plugin-dev": { title: "插件开发", file: "plugin-dev.md" },
   "api-reference": { title: "API 参考", file: "api.md" },
   faq: { title: "常见问题", file: "faq.md" },

@@ -1,18 +1,37 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Menu, X, Github } from "lucide-react";
+import { useRouter, usePathname } from "next/navigation";
+import { Menu, X, Github, User, LogOut } from "lucide-react";
+import { authHeaders, clearToken } from "@/lib/auth";
 
 const navLinks = [
   { href: "/", label: "首页" },
   { href: "/docs", label: "文档" },
   { href: "/flash", label: "在线刷机" },
-  { href: "/store", label: "插件市场" },
+  { href: "/config", label: "设备配置" },
 ];
 
 export function Navbar() {
+  const router = useRouter();
+  const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [username, setUsername] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/me", { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setUsername(d?.username || null))
+      .catch(() => setUsername(null));
+  }, [pathname]);
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST", headers: authHeaders() });
+    clearToken();
+    setUsername(null);
+    router.refresh();
+  };
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-ink/10 bg-white/80 backdrop-blur-md">
@@ -45,6 +64,21 @@ export function Navbar() {
           >
             <Github size={18} />
           </a>
+          {username ? (
+            <div className="flex items-center gap-3 text-sm">
+              <span className="flex items-center gap-1 text-ink-light">
+                <User size={14} />
+                {username}
+              </span>
+              <button onClick={handleLogout} className="text-ink-light hover:text-ink transition-colors" title="退出">
+                <LogOut size={16} />
+              </button>
+            </div>
+          ) : (
+            <Link href="/login" className="text-sm text-ink-light hover:text-ink transition-colors">
+              登录
+            </Link>
+          )}
         </div>
 
         {/* Mobile toggle */}
@@ -80,6 +114,25 @@ export function Navbar() {
               <Github size={16} />
               GitHub
             </a>
+            {username ? (
+              <div className="flex items-center justify-between py-1">
+                <span className="flex items-center gap-1 text-sm text-ink-light">
+                  <User size={14} />
+                  {username}
+                </span>
+                <button onClick={handleLogout} className="text-sm text-ink-light hover:text-ink">
+                  退出
+                </button>
+              </div>
+            ) : (
+              <Link
+                href="/login"
+                className="text-sm text-ink-light hover:text-ink transition-colors py-1"
+                onClick={() => setMobileOpen(false)}
+              >
+                登录
+              </Link>
+            )}
           </div>
         </div>
       )}

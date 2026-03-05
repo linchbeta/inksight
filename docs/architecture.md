@@ -34,8 +34,8 @@ graph TD
 
 ### 配网流程 (Captive Portal)
 
-1. 首次启动或长按 BOOT 按钮 2 秒，进入配网模式。
-2. ESP32 开启 AP 热点 `InkSight-XXXXXX`。
+1. 首次启动或长按 BOOT 按钮 2 秒以上，进入配网模式。
+2. ESP32 开启 AP 热点 `InkSight-XXXXX`。
 3. 用户连接后自动弹出配置页面。
 4. 选择 WiFi 并输入密码，配置完成后设备自动连接。
 
@@ -47,12 +47,13 @@ graph TD
 
 ## 前端形态 (Frontend)
 
-InkSight 当前采用双前端结构：
+InkSight 当前统一采用 `webapp/`（Next.js）作为前端形态，负责：
 
-- **`webconfig/`（静态运维页）**：由后端直接托管与路由，提供预览、配置、统计页面（`/`、`/config`、`/dashboard`）。
-- **`webapp/`（Next.js 官网与刷机页）**：独立 Node.js 前端，用于官网展示、文档导航、Web 在线刷机等交互能力。
+- 官网展示与文档导航
+- Web 在线刷机
+- 设备在线配置（`/config`）
 
-在线刷机 API 由后端统一提供（`/api/firmware/*`）。`webapp` 支持两种接入方式：
+在线刷机 API 由后端统一提供（`/api/firmware/`*）。`webapp` 支持两种接入方式：
 
 1. 浏览器直连后端：配置 `NEXT_PUBLIC_FIRMWARE_API_BASE`。
 2. 同域代理：使用 Next.js API Route 转发到 `INKSIGHT_BACKEND_API_BASE`。
@@ -63,26 +64,24 @@ InkSight 当前采用双前端结构：
 2. **Context:** 并行获取外部数据（时间、天气、电池电量）。
 3. **Intelligence:** 根据内容模式构造 Prompt，调用 LLM API 获取文本。
 4. **Rasterization (核心):**
-   - 创建 400x300 画布 (Mode '1', 1-bit 黑白)。
-   - 加载字体文件（Noto Serif）。
-   - 执行 Text Wrap 算法计算多行布局。
-   - 绘制 UI 元素（线条、图标、电量指示）。
+  - 创建 400x300 画布 (Mode '1', 1-bit 黑白)。
+  - 加载字体文件（Noto Serif）。
+  - 执行 Text Wrap 算法计算多行布局。
+  - 绘制 UI 元素（线条、图标、电量指示）。
 5. **Output:** 将 Image 对象转换为 BMP 字节流返回。
 
-### 内容模式 (10 种)
+### 内容模式概况
 
-| 模式 ID | 名称 | 说明 |
-|---------|------|------|
-| STOIC | 斯多葛哲学 | 庄重、内省的哲学语录 |
-| ROAST | 毒舌吐槽 | 犀利的中文吐槽，黑色幽默 |
-| ZEN | 禅意 | 极简的汉字，营造宁静氛围 |
-| DAILY | 每日推荐 | 语录、书籍推荐、冷知识、节气 |
-| BRIEFING | AI 简报 | HN/PH 热榜 + AI 行业洞察 |
-| ARTWALL | AI 画廊 | 黑白版画风格的 AI 艺术作品 |
-| RECIPE | 每日食谱 | 时令三餐方案，荤素搭配 |
-| FITNESS | 健身计划 | 居家健身训练计划 |
-| POETRY | 每日诗词 | 精选古典诗词，感受文字之美 |
-| COUNTDOWN | 倒计时 | 重要日期倒计时/正计日，纪念日提醒 |
+| 名称 | 说明 |
+| ---- | ---- |
+| DAILY（每日推荐） | 语录、书籍推荐、冷知识、节气 |
+| WEATHER（天气） | 实时天气和未来趋势看板 |
+| POETRY（每日诗词） | 精选古典诗词，感受文字之美 |
+| ARTWALL（AI 画廊） | 黑白版画风格的 AI 艺术作品 |
+| ALMANAC（老黄历） | 农历、节气、宜忌信息 |
+| BRIEFING（AI 简报） | HN/PH 热榜 + AI 行业洞察 |
+| 更多模式 | STOIC（斯多葛哲学）、RECIPE（每日食谱）、COUNTDOWN（倒计时）、MEMO（便签）、HABIT（打卡）、FITNESS（健身）、LETTER（慢信）…… 更多模式，由你定义！ |
+
 
 ### 智能缓存系统
 
@@ -102,9 +101,12 @@ InkSight 当前采用双前端结构：
 
 ## 性能指标
 
-| 指标 | 数值 |
-|------|------|
-| Cache Hit 响应时间 | < 1 秒 |
+
+| 指标              | 数值                |
+| --------------- | ----------------- |
+| Cache Hit 响应时间  | < 1 秒             |
 | Cache Miss 响应时间 | 15-20 秒 (多模式并行生成) |
-| Cache Hit 率 | > 95% |
-| 设备唤醒到显示完成 | < 15 秒 (取决于网络) |
+| Cache Hit 率     | > 95%             |
+| 设备唤醒到显示完成       | < 15 秒 (取决于网络)    |
+
+

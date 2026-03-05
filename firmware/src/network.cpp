@@ -87,12 +87,19 @@ static bool readExact(WiFiClient *s, uint8_t *buf, int len) {
 
 // ── Fetch BMP from backend ──────────────────────────────────
 
-bool fetchBMP(bool nextMode) {
+bool fetchBMP(bool nextMode, bool *isFallback) {
+    if (isFallback) *isFallback = false;
     float v = readBatteryVoltage();
     String mac = WiFi.macAddress();
     int rssi = WiFi.RSSI();
+#if DEBUG_MODE
+    int effectiveRefreshMin = DEBUG_REFRESH_MIN;
+#else
+    int effectiveRefreshMin = cfgSleepMin;
+#endif
     String url = cfgServer + "/api/render?v=" + String(v, 2)
                + "&mac=" + mac + "&rssi=" + String(rssi)
+               + "&refresh_min=" + String(effectiveRefreshMin)
                + "&w=" + String(W) + "&h=" + String(H);
     if (nextMode) {
         url += "&next=1";
@@ -111,6 +118,8 @@ bool fetchBMP(bool nextMode) {
     }
     http.setTimeout(HTTP_TIMEOUT);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    const char *headerKeys[] = {"X-Content-Fallback"};
+    http.collectHeaders(headerKeys, 1);
 
     if (cfgDeviceToken.length() > 0) {
         http.addHeader("X-Device-Token", cfgDeviceToken);
@@ -119,6 +128,13 @@ bool fetchBMP(bool nextMode) {
     Serial.printf("Free heap: %d\n", ESP.getFreeHeap());
     int code = http.GET();
     Serial.printf("HTTP code: %d\n", code);
+    if (isFallback) {
+        String fallbackHeader = http.header("X-Content-Fallback");
+        *isFallback = (fallbackHeader == "1" || fallbackHeader == "true");
+        if (*isFallback) {
+            Serial.println("[RENDER] Received fallback content");
+        }
+    }
 
     if (code != 200) {
         if (code < 0) {
@@ -182,6 +198,57 @@ bool fetchBMP(bool nextMode) {
     return true;
 }
 
+bool hasPendingRemoteAction(bool *shouldExitLive) {
+    if (WiFi.status() != WL_CONNECTED) return false;
+
+    String mac = WiFi.macAddress();
+    String url = cfgServer + "/api/device/" + mac + "/state";
+
+    bool useSSL = cfgServer.startsWith("https://");
+    WiFiClient plainClient;
+    WiFiClientSecure secClient;
+    HTTPClient http;
+    if (useSSL) {
+        secClient.setCACert(ROOT_CA);
+        http.begin(secClient, url);
+    } else {
+        http.begin(plainClient, url);
+    }
+    http.setTimeout(HTTP_TIMEOUT);
+    if (cfgDeviceToken.length() > 0) {
+        http.addHeader("X-Device-Token", cfgDeviceToken);
+    }
+
+    int code = http.GET();
+    if (code != 200) {
+        http.end();
+        return false;
+    }
+
+    String body = http.getString();
+    http.end();
+
+    if (shouldExitLive) {
+        bool intervalRequested =
+            body.indexOf("\"runtime_mode\":\"interval\"") >= 0 ||
+            body.indexOf("\"runtime_mode\": \"interval\"") >= 0;
+        *shouldExitLive = intervalRequested;
+    }
+
+    bool pendingRefresh =
+        body.indexOf("\"pending_refresh\":1") >= 0 ||
+        body.indexOf("\"pending_refresh\": 1") >= 0 ||
+        body.indexOf("\"pending_refresh\":true") >= 0 ||
+        body.indexOf("\"pending_refresh\": true") >= 0;
+
+    bool pendingMode =
+        (body.indexOf("\"pending_mode\":\"") >= 0 || body.indexOf("\"pending_mode\": \"") >= 0) &&
+        body.indexOf("\"pending_mode\":\"\"") < 0 &&
+        body.indexOf("\"pending_mode\": \"\"") < 0;
+
+    return pendingRefresh || pendingMode;
+}
+
 // ── Post config to backend ──────────────────────────────────
 
 void postConfigToBackend() {
@@ -216,22 +283,34 @@ void postConfigToBackend() {
     http.end();
 }
 
-// ── Post favorite to backend ────────────────────────────────
+// ── Post runtime mode to backend ────────────────────────────
 
-bool postFavorite() {
+bool postRuntimeMode(const char *mode) {
     String mac = WiFi.macAddress();
-    String url = cfgServer + "/api/device/" + mac + "/favorite";
-    Serial.printf("POST %s\n", url.c_str());
-
+    String url = cfgServer + "/api/device/" + mac + "/runtime";
+    bool useSSL = cfgServer.startsWith("https://");
+    WiFiClient plainClient;
+    WiFiClientSecure secClient;
     HTTPClient http;
-    WiFiClient client;
-    http.begin(client, url);
+    if (useSSL) {
+        secClient.setCACert(ROOT_CA);
+        http.begin(secClient, url);
+    } else {
+        http.begin(plainClient, url);
+    }
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(HTTP_TIMEOUT);
+    if (cfgDeviceToken.length() > 0) {
+        http.addHeader("X-Device-Token", cfgDeviceToken);
+    }
 
-    int code = http.POST("{}");
-    Serial.printf("POST /api/device/.../favorite -> %d\n", code);
+    String body = String("{\"mode\":\"") + mode + "\"}";
+    int code = http.POST(body);
     http.end();
+
+    if (code == 404) {
+        return true;
+    }
     return (code >= 200 && code < 300);
 }
 

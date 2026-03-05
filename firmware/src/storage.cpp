@@ -3,6 +3,7 @@
 #include <Preferences.h>
 
 static Preferences prefs;
+static const char *LIVE_BOOT_MARKER = __DATE__ " " __TIME__;
 
 // Config version — bump when NVS schema changes
 static const int CONFIG_VERSION = 1;
@@ -68,6 +69,19 @@ void setRetryCount(int count) {
 
 void resetRetryCount() {
     setRetryCount(0);
+}
+
+bool isFirstInstallLiveModePending() {
+    prefs.begin("inksight", true);
+    String marker = prefs.getString("live_boot_marker", "");
+    prefs.end();
+    return marker != String(LIVE_BOOT_MARKER);
+}
+
+void markFirstInstallLiveModeDone() {
+    prefs.begin("inksight", false);
+    prefs.putString("live_boot_marker", LIVE_BOOT_MARKER);
+    prefs.end();
 }
 
 // ── Save WiFi credentials ───────────────────────────────────

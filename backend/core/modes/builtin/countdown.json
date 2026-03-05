@@ -4,6 +4,12 @@
   "icon": "flag",
   "cacheable": false,
   "description": "重要日期倒计时/正计时",
+  "settings_schema": [
+    {
+      "key": "countdownEvents",
+      "label": "倒计时事件"
+    }
+  ],
   "content": {
     "type": "computed",
     "provider": "countdown",

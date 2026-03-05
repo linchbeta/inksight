@@ -15,6 +15,7 @@ _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 # 允许的 LLM 提供商
 _VALID_PROVIDERS = {"deepseek", "aliyun", "moonshot"}
+_VALID_IMAGE_PROVIDERS = {"aliyun"}
 
 # 允许的语言选项
 _VALID_LANGUAGES = {"zh", "en", "mixed"}
@@ -59,6 +60,8 @@ class ConfigRequest(BaseModel):
     )
     llmProvider: str = Field(default="deepseek", description="LLM 提供商")
     llmModel: str = Field(default="deepseek-chat", max_length=50, description="LLM 模型名")
+    imageProvider: str = Field(default="aliyun", description="图像模型提供商")
+    imageModel: str = Field(default="qwen-image-max", max_length=50, description="图像模型名")
     countdownEvents: list[dict] = Field(
         default_factory=list,
         max_length=10,
@@ -71,7 +74,12 @@ class ConfigRequest(BaseModel):
     )
     memoText: str = Field(default="", description="MEMO 模式下的备忘录文本")
     llmApiKey: str = Field(default="", max_length=200, description="LLM API Key (encrypted at rest)")
+    imageApiKey: str = Field(default="", max_length=200, description="Image API Key (encrypted at rest)")
     screenSize: str = Field(default="400x300", description="屏幕尺寸: 400x300 / 296x128 / 800x480")
+    modeOverrides: dict[str, dict] = Field(
+        default_factory=dict,
+        description="按模式覆盖配置，key 为 mode_id，value 可包含 city/llm_provider/llm_model 及其他模式设置项",
+    )
 
     @field_validator("mac")
     @classmethod
@@ -120,6 +128,13 @@ class ConfigRequest(BaseModel):
             raise ValueError(f"无效 LLM 提供商: {v}，可选: {_VALID_PROVIDERS}")
         return v
 
+    @field_validator("imageProvider")
+    @classmethod
+    def validate_image_provider(cls, v: str) -> str:
+        if v not in _VALID_IMAGE_PROVIDERS:
+            raise ValueError(f"无效图像提供商: {v}，可选: {_VALID_IMAGE_PROVIDERS}")
+        return v
+
     @field_validator("characterTones")
     @classmethod
     def validate_character_tones(cls, v: list[str]) -> list[str]:
@@ -133,4 +148,42 @@ class ConfigRequest(BaseModel):
                     f"角色调性包含非法字符: {t!r}，只允许中英文、数字和基本标点"
                 )
             cleaned.append(t)
+        return cleaned
+
+    @field_validator("modeOverrides")
+    @classmethod
+    def validate_mode_overrides(cls, v: dict[str, dict]) -> dict[str, dict]:
+        cleaned: dict[str, dict] = {}
+        for mode_id, raw in v.items():
+            if not isinstance(mode_id, str):
+                continue
+            key = mode_id.strip().upper()
+            if not key:
+                continue
+            if not isinstance(raw, dict):
+                continue
+
+            item: dict[str, object] = {}
+            city = raw.get("city")
+            if isinstance(city, str) and city.strip():
+                item["city"] = city.strip()[:20]
+
+            provider = raw.get("llm_provider", raw.get("llmProvider"))
+            if isinstance(provider, str) and provider.strip():
+                if provider not in _VALID_PROVIDERS:
+                    raise ValueError(f"无效 LLM 提供商: {provider}，可选: {_VALID_PROVIDERS}")
+                item["llm_provider"] = provider
+
+            model = raw.get("llm_model", raw.get("llmModel"))
+            if isinstance(model, str) and model.strip():
+                item["llm_model"] = model.strip()[:50]
+
+            for k, val in raw.items():
+                if k in {"city", "llm_provider", "llmProvider", "llm_model", "llmModel"}:
+                    continue
+                if isinstance(val, (str, int, float, bool, list, dict)) or val is None:
+                    item[k] = val
+
+            if item:
+                cleaned[key] = item
         return cleaned
