@@ -36,8 +36,10 @@ MESSAGES = {
 }
 
 
-def normalize_lang(value: str | None) -> str:
-    if not value:
+def normalize_lang(value: object) -> str:
+    # FastAPI dependency functions may pass Header(...) defaults when called directly
+    # in tests; treat any non-string value as missing language.
+    if not isinstance(value, str) or not value:
         return DEFAULT_LANG
     v = value.lower()
     return "en" if v.startswith("en") else "zh"
