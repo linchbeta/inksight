@@ -38,6 +38,8 @@ _SAFE_TONE_RE = re.compile(
 class ConfigRequest(BaseModel):
     """设备配置请求体"""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     mac: str = Field(..., description="设备 MAC 地址 (AA:BB:CC:DD:EE:FF)")
     nickname: str = Field(default="", max_length=32, description="设备昵称")
     modes: list[str] = Field(

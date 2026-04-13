@@ -828,6 +828,8 @@ function normalizeArrayField(value) {
 
 function addTimeSlotRule(startHour=9, endHour=12, modes=[]) {
   const container = document.getElementById('timeSlotRules');
+  console.log('[DEBUG addTimeSlotRule] called with startHour:', startHour, 'endHour:', endHour, 'modes:', modes);
+  console.log('[DEBUG addTimeSlotRule] container.children.length before:', container.children.length);
   if (container.children.length >= 12) { showToast('最多添加 12 个时段', 'error'); return; }
 
   const row = document.createElement('div');
@@ -852,7 +854,8 @@ function addTimeSlotRule(startHour=9, endHour=12, modes=[]) {
 
 function getTimeSlotRules() {
   const rules = [];
-  document.querySelectorAll('#timeSlotRules .ts-row').forEach(row => {
+  const rows = document.querySelectorAll('#timeSlotRules .ts-row');
+  rows.forEach(row => {
     const inputs = row.querySelectorAll('input[type=number]');
     const startHour = parseInt(inputs[0].value) || 0;
     const endHour = parseInt(inputs[1].value) || 24;

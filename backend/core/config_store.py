@@ -1405,14 +1405,14 @@ async def save_config(mac: str, data: dict) -> int:
     await db.execute("UPDATE configs SET is_active = 0 WHERE mac = ?", (mac,))
 
     countdown_events_json = json.dumps(
-        data.get("countdownEvents", []), ensure_ascii=False
+        data.get("countdownEvents", []) or data.get("countdown_events", []), ensure_ascii=False
     )
     time_slot_rules_json = json.dumps(
-        data.get("timeSlotRules", []), ensure_ascii=False
+        data.get("timeSlotRules", []) or data.get("time_slot_rules", []), ensure_ascii=False
     )
     memo_text = data.get("memoText", "")
     mode_overrides_json = json.dumps(
-        data.get("modeOverrides", {}), ensure_ascii=False
+        data.get("modeOverrides", {}) or data.get("mode_overrides", {}), ensure_ascii=False
     )
     # 注意：API key 不再保存到设备配置中，改为使用用户级别的配置（user_llm_config 表）
     # 这里依赖 configs 表的默认值将 is_active 设为 1，因此不再显式写入该列，避免列数不匹配。

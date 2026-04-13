@@ -30,7 +30,7 @@ async def post_config(
     authorization: Optional[str] = Header(default=None),
     ink_session: Optional[str] = Cookie(default=None),
 ):
-    data = body.model_dump()
+    data = body.model_dump(by_alias=True)
     mac = data["mac"]
     if not is_admin_authorized(authorization):
         await ensure_web_or_device_access(

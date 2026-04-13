@@ -1306,6 +1306,7 @@ function ConfigPageInner() {
         memoText: memoText,
         is_focus_listening: isFocusListening,
         always_active: alwaysActive,
+        timeSlotRules: timeSlotRules,
       };
       const res = await fetch("/api/config", {
         method: "POST",
@@ -1369,6 +1370,7 @@ function ConfigPageInner() {
         memoText: memoText,
         is_focus_listening: isFocusListening,
         always_active: alwaysActive,
+        timeSlotRules: timeSlotRules,
       };
       const res = await fetch("/api/config", {
         method: "POST",
