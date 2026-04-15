@@ -695,6 +695,16 @@ async def build_image(
                                 mac,
                                 persona,
                             )
+                            if mac:
+                                logger.warning(
+                                    "[QUOTA DEVICE BLOCK] owner_quota_exhausted owner_user_id=%s mac=%s mode=%s cache_hit=%s usage_source=%s user_provided_api_key=%s",
+                                    quota_user_id,
+                                    mac,
+                                    persona,
+                                    cache_hit,
+                                    usage_source,
+                                    user_provided_api_key,
+                                )
                             # 对于设备端，返回兜底图；对于 Web 预览，返回 quota_exhausted 标志让接口处理
                             if mac:
                                 img = _render_quota_exhausted_image(screen_w, screen_h)
@@ -787,6 +797,16 @@ async def build_image(
                         mac,
                         persona,
                     )
+                    if mac:
+                        logger.warning(
+                            "[QUOTA DEVICE BLOCK] owner_quota_exhausted owner_user_id=%s mac=%s mode=%s cache_hit=%s usage_source=%s user_provided_api_key=%s",
+                            quota_user_id,
+                            mac,
+                            persona,
+                            cache_hit,
+                            usage_source,
+                            user_provided_api_key,
+                        )
                     # 对于设备端，仍然返回1-bit兜底图（设备无法显示弹窗）
                     # 对于Web端，会在 preview 接口中检测并返回 JSON 响应
                     img = _render_quota_exhausted_image(screen_w, screen_h)
@@ -817,6 +837,15 @@ async def build_image(
                         mac,
                         persona,
                     )
+                    if mac:
+                        logger.warning(
+                            "[QUOTA DEVICE BLOCK] quota_query_failed owner_user_id=%s mac=%s mode=%s cache_hit=%s usage_source=%s",
+                            quota_user_id,
+                            mac,
+                            persona,
+                            cache_hit,
+                            usage_source,
+                        )
                     quota_exhausted = True
                     img = _render_quota_exhausted_image(screen_w, screen_h)
                     await update_device_state(
@@ -833,6 +862,15 @@ async def build_image(
                     mac,
                     persona,
                 )
+                if mac:
+                    logger.warning(
+                        "[QUOTA DEVICE BLOCK] owner_role_lookup_failed owner_user_id=%s mac=%s mode=%s cache_hit=%s usage_source=%s",
+                        quota_user_id,
+                        mac,
+                        persona,
+                        cache_hit,
+                        usage_source,
+                    )
                 quota_exhausted = True
                 img = _render_quota_exhausted_image(screen_w, screen_h)
                 await update_device_state(
@@ -1213,7 +1251,7 @@ def _render_quota_exhausted_image(screen_w: int, screen_h: int) -> Image.Image:
     """
     img = Image.new("1", (screen_w, screen_h), 1)  # 1 = 白色背景
     draw = ImageDraw.Draw(img)
-    message = "您的免费额度已用完，请联系管理员"
+    message = "当前设备 owner 免费额度已用完，请联系 owner"
     try:
         font = load_font("noto_serif_regular", 12)
     except Exception:  # pragma: no cover - 极端环境下回退

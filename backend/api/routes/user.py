@@ -49,12 +49,12 @@ async def bind_user_device(body: dict, user_id: int = Depends(require_user)):
 
 
 @router.delete("/user/devices/{mac}")
-async def unbind_user_device(mac: str, user_id: int = Depends(require_user)):
-    result = await unbind_device(user_id, mac.upper())
+async def unbind_user_device(mac: str, force: bool = False, user_id: int = Depends(require_user)):
+    result = await unbind_device(user_id, mac.upper(), force=force)
     if result == "not_found":
         return JSONResponse({"error": "设备未绑定"}, status_code=404)
     if result == "owner_has_members":
-        return JSONResponse({"error": "owner 仍有共享成员，无法解绑"}, status_code=409)
+        return JSONResponse({"error": "owner 仍有共享成员，无法解绑；添加 ?force=true 强制解绑并移除所有成员"}, status_code=409)
     return {"ok": True}
 
 

@@ -107,7 +107,8 @@ class TestGetWeather:
 
     @pytest.mark.asyncio
     async def test_failure_returns_default(self):
-        with patch("core.context.httpx.AsyncClient") as MockClient:
+        with patch("core.context.httpx.AsyncClient") as MockClient, \
+             patch("core.context._qweather_current", new_callable=AsyncMock, return_value=None):
             instance = AsyncMock()
             instance.get = AsyncMock(side_effect=Exception("timeout"))
             instance.__aenter__ = AsyncMock(return_value=instance)

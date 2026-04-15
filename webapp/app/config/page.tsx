@@ -668,13 +668,24 @@ function ConfigPageInner() {
     }
   };
 
-  const handleUnbindDevice = async (deviceMac: string) => {
+  const handleUnbindDevice = async (deviceMac: string, force = false) => {
     try {
-      const res = await fetch(`/api/user/devices/${encodeURIComponent(deviceMac)}`, {
+      const url = `/api/user/devices/${encodeURIComponent(deviceMac)}${force ? "?force=true" : ""}`;
+      const res = await fetch(url, {
         method: "DELETE",
         headers: authHeaders(),
       });
-      if (res.ok) await loadUserDevices();
+      if (res.ok) {
+        await loadUserDevices();
+        return;
+      }
+      if (res.status === 409 && !force) {
+        const ok = confirm(tr(
+          "该设备下还有共享成员，强制解绑将移除所有成员。是否继续？",
+          "This device still has shared members. Force unbind will remove all members. Continue?"
+        ));
+        if (ok) await handleUnbindDevice(deviceMac, true);
+      }
     } catch { /* ignore */ }
   };
 

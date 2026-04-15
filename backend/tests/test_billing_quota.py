@@ -10,6 +10,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from api import shared as shared_api
 
 from core.config_store import (
     init_db,
@@ -528,6 +529,33 @@ class TestQuotaOwnerResolution:
 class TestQuotaExhaustionHandling:
     """测试额度耗尽时的硬件兼容逻辑"""
 
+    def test_render_quota_exhausted_image_message_mentions_owner(self, monkeypatch):
+        captured = {}
+
+        class _FakeDraw:
+            def __init__(self, _img):
+                pass
+
+            def textbbox(self, _pos, text, font=None):
+                captured["message"] = text
+                return (0, 0, 120, 16)
+
+            def text(self, _pos, text, fill=0, font=None):
+                captured["message"] = text
+
+        monkeypatch.setattr(shared_api, "ImageDraw", type("_FakeImageDrawModule", (), {"Draw": _FakeDraw}), raising=False)
+
+        def _fake_load_font(_font_key: str, _size: int):
+            from PIL import ImageFont
+
+            return ImageFont.load_default()
+
+        monkeypatch.setattr(shared_api, "load_font", _fake_load_font, raising=False)
+
+        shared_api._render_quota_exhausted_image(400, 300)
+
+        assert captured["message"] == "当前设备 owner 免费额度已用完，请联系 owner"
+
     @pytest.mark.asyncio
     async def test_quota_exhausted_returns_bmp_for_device(self):
         """测试设备请求时额度耗尽返回 1-bit BMP 图像"""
@@ -548,7 +576,6 @@ class TestQuotaExhaustionHandling:
             # 由于 build_image 依赖很多其他模块，这里只测试核心逻辑
             # 实际测试应该通过集成测试来完成
             pass  # 集成测试见 test_integration.py
-
     @pytest.mark.asyncio
     async def test_quota_exhausted_returns_402_for_web_preview(self):
         """测试 Web 预览时额度耗尽返回 402 状态码"""
