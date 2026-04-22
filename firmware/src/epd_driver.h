@@ -21,6 +21,11 @@ void epdDisplayDeepClear(const uint8_t *image);
 // Full-screen display with pre-packed 2bpp data (4-color panels)
 void epdDisplay2bpp(const uint8_t *image2bpp);
 
+// Full-screen display reading 2bpp data from LittleFS (no large RAM buffer)
+#if defined(EPD_COLOR_PAGED)
+void epdDisplay2bppPaged(const char *path);
+#endif
+
 // Full-screen display with fast refresh (reduced flashing)
 void epdDisplayFast(const uint8_t *image);
 

@@ -53,14 +53,31 @@ static const int IMG_BUF_LEN = ROW_BYTES * H;
 #ifndef EPD_BPP
 #define EPD_BPP 1
 #endif
+
+#if defined(EPD_PANEL_42_HINK_SSD1683) || defined(EPD_PANEL_583_GDEY0583Z21) \
+    || (defined(EPD_PANEL_583B_V2) && (EPD_BPP >= 2 || defined(EPD_COLOR_PAGED)))
+#define EPD_COLOR_CAPABILITY 3
+#elif EPD_BPP >= 2
+#define EPD_COLOR_CAPABILITY 4
+#else
+#define EPD_COLOR_CAPABILITY 2
+#endif
+
 static const int COLOR_BUF_LEN = (W * H) / 4;  // 2bpp: 4 pixels per byte
 
 // Shared framebuffers (defined in main.cpp)
 extern uint8_t imgBuf[];
-#if EPD_BPP >= 2
+#if EPD_BPP >= 2 && !defined(EPD_COLOR_PAGED)
 extern uint8_t *colorBuf;
+#endif
+#if EPD_BPP >= 2 || defined(EPD_COLOR_PAGED)
 extern bool useColorBuf;
 bool ensureColorBuf();
+#endif
+
+// Color data file path when EPD_COLOR_PAGED is defined (2bpp stored in LittleFS)
+#if defined(EPD_COLOR_PAGED)
+#define EPD_COLOR_FILE "/color.raw"
 #endif
 
 // ── Refresh strategy ─────────────────────────────────────────

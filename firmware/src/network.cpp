@@ -616,7 +616,42 @@ bool fetchBMP(bool nextMode, bool *isFallback, String *renderedModeIdOut) {
 
         WiFiClient *stream = http.getStreamPtr();
 
-#if EPD_BPP >= 2
+#if defined(EPD_COLOR_PAGED)
+        if (contentLen == COLOR_BUF_LEN) {
+            // Stream 2bpp data directly to LittleFS
+            if (LittleFS.exists(EPD_COLOR_FILE)) {
+                LittleFS.remove(EPD_COLOR_FILE);
+            }
+            File colorFile = LittleFS.open(EPD_COLOR_FILE, "w");
+            if (!colorFile) {
+                Serial.println("Failed to open color cache file");
+                http.end();
+                return false;
+            }
+            uint8_t chunk[512];
+            int remaining = COLOR_BUF_LEN;
+            unsigned long t0 = millis();
+            bool ok = true;
+            while (remaining > 0 && ok) {
+                if (millis() - t0 > 30000) { ok = false; break; }
+                int avail = stream->available();
+                if (avail == 0) { delay(1); continue; }
+                int toRead = min(remaining, min(avail, (int)sizeof(chunk)));
+                int n = stream->readBytes(chunk, toRead);
+                if (n > 0) { colorFile.write(chunk, n); remaining -= n; }
+            }
+            colorFile.close();
+            if (!ok || remaining > 0) {
+                http.end();
+                return false;
+            }
+            useColorBuf = true;
+            http.end();
+            lastHeartbeatAt = millis();
+            return true;
+        }
+        useColorBuf = false;        
+#elif EPD_BPP >= 2
         if (contentLen == COLOR_BUF_LEN) {
             if (!ensureColorBuf()) {
                 Serial.println("colorBuf alloc failed, skip 2bpp");

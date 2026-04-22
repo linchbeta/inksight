@@ -16,6 +16,9 @@ bool cacheInit() {
 
 bool cacheSave(const uint8_t *buf, int len) {
     if (!fsReady) return false;
+    if (LittleFS.exists(CACHE_FILE)) {
+        LittleFS.remove(CACHE_FILE);
+    }
     File f = LittleFS.open(CACHE_FILE, "w");
     if (!f) {
         Serial.println("Cache write failed: cannot open file");

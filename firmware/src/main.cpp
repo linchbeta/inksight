@@ -768,8 +768,13 @@ void setup() {
 
     resetRetryCount();
 
+#if defined(EPD_COLOR_PAGED)
+    if (!useColorBuf) cacheSave(imgBuf, IMG_BUF_LEN);
+    lastContentChecksum = useColorBuf ? 1 : computeChecksum(imgBuf, IMG_BUF_LEN);
+#else
     cacheSave(imgBuf, IMG_BUF_LEN);
     lastContentChecksum = computeChecksum(imgBuf, IMG_BUF_LEN);
+#endif
     syncNTP();
     Serial.println("Displaying image...");
     smartDisplay(imgBuf);

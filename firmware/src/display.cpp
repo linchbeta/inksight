@@ -675,7 +675,15 @@ void showModePreview(const char *modeName) {
 static int refreshCount = 0;
 
 void smartDisplay(const uint8_t *image) {
-#if EPD_BPP >= 2
+#if defined(EPD_COLOR_PAGED)
+    if (useColorBuf) {
+        Serial.printf("smartDisplay: 2bpp paged color (cycle %d)\n", refreshCount);
+        epdDisplay2bppPaged(EPD_COLOR_FILE);
+        useColorBuf = false;
+        refreshCount++;
+        return;
+    }
+#elif EPD_BPP >= 2
     if (useColorBuf && colorBuf) {
         Serial.printf("smartDisplay: 2bpp color (cycle %d)\n", refreshCount);
         epdDisplay2bpp(colorBuf);
