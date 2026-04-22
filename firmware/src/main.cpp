@@ -28,9 +28,12 @@
 
 // ── Shared framebuffers (referenced by other modules via extern) ──
 uint8_t imgBuf[IMG_BUF_LEN];
-#if EPD_BPP >= 2
-uint8_t *colorBuf = nullptr;
+#if EPD_BPP >= 2 || defined(EPD_COLOR_PAGED)
 bool useColorBuf = false;
+#endif
+
+#if EPD_BPP >= 2 && !defined(EPD_COLOR_PAGED)
+uint8_t *colorBuf = nullptr;
 
 bool ensureColorBuf() {
     if (colorBuf) return true;
@@ -41,6 +44,10 @@ bool ensureColorBuf() {
     }
     Serial.printf("[MEM] colorBuf allocated %d bytes on heap\n", COLOR_BUF_LEN);
     return true;
+}
+#elif defined(EPD_COLOR_PAGED)
+bool ensureColorBuf() {
+    return true; // Paged color doesn't need RAM buffer
 }
 #endif
 
@@ -661,6 +668,7 @@ static bool decodeVoiceBmpToFrameBuffer(const uint8_t *bmpBytes, size_t bmpLen);
 // ═════════════════════════════════════════════════════════════
 
 void setup() {
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
     Serial.begin(115200);
     delay(3000);
     Serial.println("\n=== InkSight ===");

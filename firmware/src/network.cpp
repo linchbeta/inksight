@@ -539,17 +539,17 @@ bool fetchBMP(bool nextMode, bool *isFallback, String *renderedModeIdOut) {
 #else
     int effectiveRefreshMin = cfgSleepMin;
 #endif
-#if EPD_BPP >= 2
-    const int colorCapability = 4;
+#if defined(EPD_COLOR_PAGED)
+    int requestBpp = 2; // For paged color, we request 2bpp from server even if EPD_BPP is 1
 #else
-    const int colorCapability = 2;
+    int requestBpp = EPD_BPP;
 #endif
     String url = cfgServer + "/api/render?v=" + String(v, 2)
                + "&mac=" + mac + "&rssi=" + String(rssi)
                + "&refresh_min=" + String(effectiveRefreshMin)
                + "&w=" + String(W) + "&h=" + String(H)
-               + "&bpp=" + String(EPD_BPP)
-               + "&colors=" + String(colorCapability);
+               + "&bpp=" + String(requestBpp)
+               + "&colors=" + String(EPD_COLOR_CAPABILITY);
     if (nextMode) {
         url += "&next=1";
     }
